@@ -49,9 +49,10 @@ class Hp7Binary(CoordinatorEntity, BinarySensorEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
+        model = getattr(self.coordinator.api, "model", "HP7")
         return DeviceInfo(
             identifiers={(DOMAIN, self._serial)},
-            name=f"EZVIZ HP7 ({self._serial})",
+            name=f"EZVIZ {model} ({self._serial})",
             manufacturer="EZVIZ",
-            model="HP7",
+            model=model,
         )

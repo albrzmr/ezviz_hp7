@@ -26,6 +26,8 @@ class Hp7Api:
 
         self.supports_door = True
         self.supports_gate = True
+        # Modello del dispositivo (HP7/CP7). Default a HP7 finché non rilevato.
+        self.model: str = "HP7"
 
     # -------------------- Sessione SDK (solo per unlock) --------------------
 
@@ -38,7 +40,7 @@ class Hp7Api:
             url=self._region_or_url,
         )
         self._client.login()
-        _LOGGER.info("EZVIZ HP7: login OK su %s", self._client._token.get("api_url"))
+        _LOGGER.info("EZVIZ: login OK su %s", self._client._token.get("api_url"))
 
     def login(self) -> bool:
         """Compat per il setup: inizializza il client SDK."""
@@ -52,7 +54,20 @@ class Hp7Api:
             dev = self._client.get_device_infos(serial)
             cat = dev.get("deviceInfos", {}).get("deviceCategory")
             sub = dev.get("deviceInfos", {}).get("deviceSubCategory")
-            _LOGGER.info("EZVIZ HP7: device %s category=%s sub=%s", serial, cat, sub)
+            model = (
+                dev.get("deviceInfos", {}).get("deviceModel")
+                or dev.get("deviceInfos", {}).get("deviceName")
+                or sub
+                or "HP7"
+            )
+            self.model = str(model)
+            _LOGGER.info(
+                "EZVIZ %s: device %s category=%s sub=%s",
+                self.model,
+                serial,
+                cat,
+                sub,
+            )
         except Exception as e:
             _LOGGER.debug("detect_capabilities get_device_infos fallita: %s", e)
         self.supports_door = True

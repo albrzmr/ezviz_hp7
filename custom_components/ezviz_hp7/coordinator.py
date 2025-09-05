@@ -11,7 +11,7 @@ class Hp7Coordinator(DataUpdateCoordinator):
         super().__init__(
             hass,
             _LOGGER,
-            name="EZVIZ HP7",
+            name=f"EZVIZ {getattr(api, 'model', 'HP7')}",
             update_interval=timedelta(seconds=UPDATE_INTERVAL_SEC),
         )
         self.api = api

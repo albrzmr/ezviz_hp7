@@ -25,11 +25,12 @@ class Hp7LastSnapshotCamera(CoordinatorEntity, Camera):
 
     @property
     def device_info(self) -> DeviceInfo:
+        model = getattr(self.coordinator.api, "model", "HP7")
         return DeviceInfo(
             identifiers={(DOMAIN, self._serial)},
-            name=f"EZVIZ HP7 ({self._serial})",
+            name=f"EZVIZ {model} ({self._serial})",
             manufacturer="EZVIZ",
-            model="HP7",
+            model=model,
         )
 
     async def async_camera_image(self, width: int | None = None, height: int | None = None):

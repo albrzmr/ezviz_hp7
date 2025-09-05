@@ -29,18 +29,30 @@ class EzvizHp7Button(ButtonEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
+        model = getattr(self._api, "model", "HP7")
         return DeviceInfo(
             identifiers={(DOMAIN, self._serial)},
-            name=f"EZVIZ HP7 ({self._serial})",
+            name=f"EZVIZ {model} ({self._serial})",
             manufacturer="EZVIZ",
-            model="HP7",
+            model=model,
         )
 
     async def async_press(self) -> None:
-        _LOGGER.warning("EZVIZ HP7: premuto bottone '%s' (%s)", self._action, self._serial)
+        model = getattr(self._api, "model", "HP7")
+        _LOGGER.warning("EZVIZ %s: premuto bottone '%s' (%s)", model, self._action, self._serial)
         if self._action == "unlock_gate":
             ok = await self.hass.async_add_executor_job(self._api.unlock_gate, self._serial)
-            _LOGGER.log(logging.INFO if ok else logging.ERROR, "EZVIZ HP7: 'Sblocca Cancello' %s.", "OK" if ok else "FALLITO")
+            _LOGGER.log(
+                logging.INFO if ok else logging.ERROR,
+                "EZVIZ %s: 'Sblocca Cancello' %s.",
+                model,
+                "OK" if ok else "FALLITO",
+            )
         elif self._action == "unlock_door":
             ok = await self.hass.async_add_executor_job(self._api.unlock_door, self._serial)
-            _LOGGER.log(logging.INFO if ok else logging.ERROR, "EZVIZ HP7: 'Sblocca Porta' %s.", "OK" if ok else "FALLITO")
+            _LOGGER.log(
+                logging.INFO if ok else logging.ERROR,
+                "EZVIZ %s: 'Sblocca Porta' %s.",
+                model,
+                "OK" if ok else "FALLITO",
+            )
