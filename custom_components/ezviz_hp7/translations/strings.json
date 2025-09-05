@@ -2,12 +2,12 @@
   "config": {
     "step": {
       "user": {
-        "title": "Collega EZVIZ HP7",
+        "title": "Collega EZVIZ HP7/CP7",
         "description": "Inserisci le credenziali EZVIZ e la regione."
       },
       "pick_serial": {
         "title": "Seleziona dispositivo",
-        "description": "Scegli il serial del tuo HP7."
+        "description": "Scegli il serial del tuo HP7 o CP7."
       }
     },
     "error": {

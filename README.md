@@ -1,14 +1,14 @@
-# Home Assistant Integration for EZVIZ HP7 Intercom
+# Home Assistant Integration for EZVIZ HP7/CP7 Intercom
 
-This is a **custom Home Assistant integration** that adds support for the **EZVIZ HP7 video intercom**.  
-It allows you to **unlock the door and the gate remotely**, monitor device status, and expose the main functions of the HP7 within your Home Assistant environment.
+This is a **custom Home Assistant integration** that adds support for the **EZVIZ HP7 and CP7 video intercoms**.
+It allows you to **unlock the door and the gate remotely**, monitor device status, and expose the main functions of the device within your Home Assistant environment.
 
 DO NOT USE THIS INTEGRATION AND THE OFFICIAL ONE TOGETHER (it may not open the door) https://www.home-assistant.io/integrations/ezviz/
 ---
 
 ## ✨ Features
 
-- Discover and register your EZVIZ HP7 device automatically.
+- Discover and register your EZVIZ HP7 or CP7 device automatically.
 - Control:
   - 🔑 Unlock **door** (lock #2 by default).
   - 🚪 Unlock **gate** (lock #1 by default).
@@ -37,20 +37,20 @@ DO NOT USE THIS INTEGRATION AND THE OFFICIAL ONE TOGETHER (it may not open the d
 ## ⚙️ Configuration
 
 1. In Home Assistant, go to **Settings → Devices & Services → Add Integration**.
-2. Search for **EZVIZ HP7**.
+2. Search for **EZVIZ HP7/CP7**.
 3. Enter your **EZVIZ account credentials**:
    - **Username** (email used for EZVIZ app login).
    - **Password**.
    - **Region** (usually `eu` for Europe, `us` for North America).
 
-The integration will log in through the EZVIZ API and automatically detect your HP7 device.
+The integration will log in through the EZVIZ API and automatically detect your HP7 or CP7 device.
 
 ---
 
 ## 🛠 Usage
 
 Once set up, you will see:
-- A device card for your **EZVIZ HP7 intercom**.
+- A device card for your **EZVIZ HP7/CP7 intercom**.
 - Two services exposed:
   - `ezviz_hp7.unlock_door`
   - `ezviz_hp7.unlock_gate`
@@ -74,9 +74,10 @@ action:
 
 ## 🚧 Limitations
 
-- **Live video streaming** is not yet supported inside Home Assistant.  
-  The HP7 uses temporary tickets and relay servers, which are still under investigation.
-- The integration currently supports **one HP7 device per account** (multi-device support planned).
+- **Live video streaming** uses the local RTSP feed of the device. The device must be
+  reachable on your network and the integration needs to obtain the verification code
+  from EZVIZ.
+- The integration currently supports **one device per account** (multi-device support planned).
 
 ---
 

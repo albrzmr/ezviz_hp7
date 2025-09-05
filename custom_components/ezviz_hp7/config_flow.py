@@ -20,23 +20,24 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         self._cached_creds: dict | None = None
         self._device_options: dict[str, str] | None = None  # serial -> label
+        self._api: Hp7Api | None = None
 
     async def async_step_user(self, user_input=None):
         # Step 1: credenziali + regione
         if user_input is None:
             return self.async_show_form(step_id="user", data_schema=DATA_SCHEMA)
 
-        api = Hp7Api(user_input["username"], user_input["password"], user_input[CONF_REGION])
+        self._api = Hp7Api(user_input["username"], user_input["password"], user_input[CONF_REGION])
 
         # Login e tentativo discovery
         try:
-            ok = await self.hass.async_add_executor_job(api.login)
+            ok = await self.hass.async_add_executor_job(self._api.login)
             if not ok:
                 raise RuntimeError("login_failed")
 
             devices = {}
-            if hasattr(api, "list_devices"):
-                devices = await self.hass.async_add_executor_job(api.list_devices)
+            if hasattr(self._api, "list_devices"):
+                devices = await self.hass.async_add_executor_job(self._api.list_devices)
         except Exception:
             # Mostra errore credenziali/connessione
             return self.async_show_form(
@@ -77,8 +78,14 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         await self.async_set_unique_id(serial)
         self._abort_if_unique_id_configured()
 
+        if self._api:
+            await self.hass.async_add_executor_job(self._api.detect_capabilities, serial)
+            model = self._api.model
+        else:
+            model = "HP7"
+
         data = {**(self._cached_creds or {}), CONF_SERIAL: serial}
-        title = f"EZVIZ HP7 ({serial})"
+        title = f"EZVIZ {model} ({serial})"
         return self.async_create_entry(title=title, data=data)
 
     async def async_step_enter_serial(self, user_input=None):
@@ -91,6 +98,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         await self.async_set_unique_id(serial)
         self._abort_if_unique_id_configured()
 
+        if self._api:
+            await self.hass.async_add_executor_job(self._api.detect_capabilities, serial)
+            model = self._api.model
+        else:
+            model = "HP7"
+
         data = {**(self._cached_creds or {}), CONF_SERIAL: serial}
-        title = f"EZVIZ HP7 ({serial})"
+        title = f"EZVIZ {model} ({serial})"
         return self.async_create_entry(title=title, data=data)
