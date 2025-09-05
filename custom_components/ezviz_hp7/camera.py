@@ -1,9 +1,14 @@
 from __future__ import annotations
+import logging
+
 from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import DeviceInfo
 from .const import DOMAIN
+
+
+_LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(hass, entry, async_add_entities):
     data = hass.data[DOMAIN][entry.entry_id]
@@ -38,16 +43,23 @@ class Hp7LastSnapshotCamera(CoordinatorEntity, Camera):
         data = self.coordinator.data or {}
         url = data.get("last_alarm_pic")
         if not url:
+            _LOGGER.debug("%s: nessuna last_alarm_pic disponibile", self._serial)
             return None
 
         session = async_get_clientsession(self.hass)
         # Primo tentativo “semplice”
         try:
             async with session.get(url, timeout=15) as resp:
+                _LOGGER.debug(
+                    "%s: fetch snapshot status=%s", self._serial, resp.status
+                )
                 if resp.status == 200:
                     return await resp.read()
-        except Exception:
-            pass
+                _LOGGER.warning(
+                    "%s: snapshot HTTP status %s", self._serial, resp.status
+                )
+        except Exception as e:
+            _LOGGER.debug("%s: primo tentativo snapshot fallito: %s", self._serial, e)
 
         headers = {
             "User-Agent": "EZVIZ/6.9.5 (HomeAssistant)",
@@ -55,10 +67,21 @@ class Hp7LastSnapshotCamera(CoordinatorEntity, Camera):
             "Accept-Encoding": "gzip, deflate, br",
         }
         try:
-            async with session.get(url, headers=headers, timeout=15, allow_redirects=True) as resp:
+            async with session.get(
+                url, headers=headers, timeout=15, allow_redirects=True
+            ) as resp:
+                _LOGGER.debug(
+                    "%s: fetch snapshot (headers) status=%s", self._serial, resp.status
+                )
                 if resp.status == 200:
                     return await resp.read()
-        except Exception:
+                _LOGGER.warning(
+                    "%s: snapshot (headers) HTTP status %s", self._serial, resp.status
+                )
+        except Exception as e:
+            _LOGGER.debug(
+                "%s: secondo tentativo snapshot fallito: %s", self._serial, e
+            )
             return None
 
         return None
@@ -73,7 +96,16 @@ class Hp7LastSnapshotCamera(CoordinatorEntity, Camera):
         port = data.get("local_rtsp_port") or "554"
         password = data.get("rtsp_password")
         if ip and password:
-            return f"rtsp://admin:{password}@{ip}:{port}/Streaming/Channels/101/"
+            url = f"rtsp://admin:{password}@{ip}:{port}/Streaming/Channels/101/"
+            _LOGGER.debug("%s: RTSP URL costruito: %s", self._serial, url)
+            return url
+        _LOGGER.debug(
+            "%s: info RTSP mancanti (ip=%s, port=%s, pass=%s)",
+            self._serial,
+            ip,
+            port,
+            bool(password),
+        )
         return None
 
     def _update_supported_features(self) -> None:
@@ -81,6 +113,15 @@ class Hp7LastSnapshotCamera(CoordinatorEntity, Camera):
             CameraEntityFeature.STREAM if self._build_rtsp_url() else 0
         )
 
+        _LOGGER.debug(
+            "%s: supported_features=%s", self._serial, self._attr_supported_features
+        )
+
     def _handle_coordinator_update(self) -> None:
         self._update_supported_features()
+        _LOGGER.debug(
+            "%s: coordinator data aggiornata", self._serial
+        )
+
+
         super()._handle_coordinator_update()

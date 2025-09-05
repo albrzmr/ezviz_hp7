@@ -94,9 +94,15 @@ class Hp7Api:
             _LOGGER.error("CLI 'pyezvizapi' non trovata nel PATH del container.")
             return False, ""
         cmd = [self._cli, "-u", self._username, "-p", self._password, "-r", self._region_or_url] + args
+        safe_cmd = cmd[:]
+        if "-p" in safe_cmd:
+            safe_cmd[safe_cmd.index("-p") + 1] = "****"
+        _LOGGER.debug("Eseguo CLI: %s", safe_cmd)
         try:
             out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, timeout=25)
-            return True, out.decode("utf-8", "ignore")
+            out_str = out.decode("utf-8", "ignore")
+            _LOGGER.debug("CLI output: %s", out_str)
+            return True, out_str
         except subprocess.CalledProcessError as e:
             _LOGGER.error("CLI error (%s): %s", e.returncode, (e.output or b"").decode("utf-8", "ignore"))
             return False, ""
@@ -138,6 +144,9 @@ class Hp7Api:
                 auth = self._client.get_cam_auth_code(serial)
                 if isinstance(auth, dict) and auth.get("devAuthCode"):
                     data["rtsp_password"] = auth["devAuthCode"]
+                    _LOGGER.debug("%s: rtsp_password recuperato", serial)
+                else:
+                    _LOGGER.debug("%s: rtsp_password non trovato", serial)
             except Exception as e:  # noqa: BLE001 - meglio non interrompere lo status
                 _LOGGER.debug("get_cam_auth_code fallita: %s", e)
 
@@ -150,8 +159,12 @@ class Hp7Api:
                     status = cam.get("STATUS", {}) if isinstance(cam, dict) else {}
                     if not data.get("local_ip") and status.get("local_ip"):
                         data["local_ip"] = status["local_ip"]
+                        _LOGGER.debug("local_ip da load_cameras: %s", data["local_ip"])
                     if not data.get("local_rtsp_port") and status.get("local_rtsp_port"):
                         data["local_rtsp_port"] = status["local_rtsp_port"]
+                        _LOGGER.debug(
+                            "local_rtsp_port da load_cameras: %s", data["local_rtsp_port"]
+                        )
 
                     if not data.get("local_ip"):
                         dev = self._client.get_device_infos(serial) or {}
@@ -163,10 +176,17 @@ class Hp7Api:
                         )
                         if ip:
                             data["local_ip"] = ip
+                            _LOGGER.debug("local_ip da get_device_infos: %s", ip)
                 except Exception as e:  # noqa: BLE001
                     _LOGGER.debug(
                         "recupero local_ip/local_rtsp_port fallito: %s", e
                     )
+
+
+        log_data = dict(data)
+        if log_data.get("rtsp_password"):
+            log_data["rtsp_password"] = "***"
+        _LOGGER.debug("Status finale per %s: %s", serial, log_data)
 
         return data
 
