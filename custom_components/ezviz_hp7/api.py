@@ -182,10 +182,12 @@ class Hp7Api:
                         "recupero local_ip/local_rtsp_port fallito: %s", e
                     )
 
+
         log_data = dict(data)
         if log_data.get("rtsp_password"):
             log_data["rtsp_password"] = "***"
         _LOGGER.debug("Status finale per %s: %s", serial, log_data)
+
         return data
 
     # -------------------- Sblocco --------------------

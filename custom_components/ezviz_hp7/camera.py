@@ -112,6 +112,7 @@ class Hp7LastSnapshotCamera(CoordinatorEntity, Camera):
         self._attr_supported_features = (
             CameraEntityFeature.STREAM if self._build_rtsp_url() else 0
         )
+
         _LOGGER.debug(
             "%s: supported_features=%s", self._serial, self._attr_supported_features
         )
@@ -121,4 +122,6 @@ class Hp7LastSnapshotCamera(CoordinatorEntity, Camera):
         _LOGGER.debug(
             "%s: coordinator data aggiornata", self._serial
         )
+
+
         super()._handle_coordinator_update()
