@@ -110,10 +110,23 @@ class Hp7Api:
             return {}
         try:
             data = json.loads(out)
-            return data if isinstance(data, dict) else {}
+            if not isinstance(data, dict):
+                data = {}
         except Exception as e:
             _LOGGER.error("Parse JSON status fallito: %s", e)
-            return {}
+            data = {}
+
+        if data:
+            # Prova a recuperare il codice di verifica per lo streaming RTSP.
+            try:
+                self.ensure_client()
+                auth = self._client.get_cam_auth_code(serial)
+                if isinstance(auth, dict) and auth.get("devAuthCode"):
+                    data["rtsp_password"] = auth["devAuthCode"]
+            except Exception as e:  # noqa: BLE001 - meglio non interrompere lo status
+                _LOGGER.debug("get_cam_auth_code fallita: %s", e)
+
+        return data
 
     # -------------------- Sblocco --------------------
 

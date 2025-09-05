@@ -74,8 +74,9 @@ action:
 
 ## 🚧 Limitations
 
-- **Live video streaming** is not yet supported inside Home Assistant.  
-  The HP7 uses temporary tickets and relay servers, which are still under investigation.
+- **Live video streaming** uses the local RTSP feed of the HP7. The device must be
+  reachable on your network and the integration needs to obtain the verification code
+  from EZVIZ.
 - The integration currently supports **one HP7 device per account** (multi-device support planned).
 
 ---
