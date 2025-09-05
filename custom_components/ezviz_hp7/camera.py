@@ -21,7 +21,8 @@ class Hp7LastSnapshotCamera(CoordinatorEntity, Camera):
         self._serial = serial
         self._attr_name = "Ultima Istantanea"
         self._attr_unique_id = f"{DOMAIN}_{serial}_last_snapshot"
-        self._attr_supported_features = CameraEntityFeature.STREAM
+        self._attr_supported_features = 0
+        self._update_supported_features()
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -64,6 +65,9 @@ class Hp7LastSnapshotCamera(CoordinatorEntity, Camera):
 
     async def stream_source(self) -> str | None:
         """Restituisce l'URL RTSP per lo streaming live."""
+        return self._build_rtsp_url()
+
+    def _build_rtsp_url(self) -> str | None:
         data = self.coordinator.data or {}
         ip = data.get("local_ip")
         port = data.get("local_rtsp_port") or "554"
@@ -71,3 +75,12 @@ class Hp7LastSnapshotCamera(CoordinatorEntity, Camera):
         if ip and password:
             return f"rtsp://admin:{password}@{ip}:{port}/Streaming/Channels/101/"
         return None
+
+    def _update_supported_features(self) -> None:
+        self._attr_supported_features = (
+            CameraEntityFeature.STREAM if self._build_rtsp_url() else 0
+        )
+
+    def _handle_coordinator_update(self) -> None:
+        self._update_supported_features()
+        super()._handle_coordinator_update()

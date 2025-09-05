@@ -141,6 +141,33 @@ class Hp7Api:
             except Exception as e:  # noqa: BLE001 - meglio non interrompere lo status
                 _LOGGER.debug("get_cam_auth_code fallita: %s", e)
 
+            # Se mancano dati di rete nel JSON ottenuto via CLI, prova con le API.
+            if not data.get("local_ip") or not data.get("local_rtsp_port"):
+                try:
+                    self.ensure_client()
+                    cams = self._client.load_cameras() or {}
+                    cam = cams.get(serial, {}) if isinstance(cams, dict) else {}
+                    status = cam.get("STATUS", {}) if isinstance(cam, dict) else {}
+                    if not data.get("local_ip") and status.get("local_ip"):
+                        data["local_ip"] = status["local_ip"]
+                    if not data.get("local_rtsp_port") and status.get("local_rtsp_port"):
+                        data["local_rtsp_port"] = status["local_rtsp_port"]
+
+                    if not data.get("local_ip"):
+                        dev = self._client.get_device_infos(serial) or {}
+                        ip = (
+                            dev.get("deviceInfos", {}).get("lanIp")
+                            or dev.get("deviceInfos", {}).get("netIp")
+                            or dev.get("lanIp")
+                            or dev.get("netIp")
+                        )
+                        if ip:
+                            data["local_ip"] = ip
+                except Exception as e:  # noqa: BLE001
+                    _LOGGER.debug(
+                        "recupero local_ip/local_rtsp_port fallito: %s", e
+                    )
+
         return data
 
     # -------------------- Sblocco --------------------
