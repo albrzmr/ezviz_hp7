@@ -55,10 +55,6 @@ jobs:
   typecheck:
     name: mypy
     runs-on: ubuntu-latest
-    # First-iteration policy: report findings but don't gate merges
-    # while the codebase grows its type coverage.  Flip to ``false``
-    # once the integration is fully typed.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -71,10 +67,13 @@ jobs:
           # Runtime deps so mypy can resolve ``from pyezvizapi`` etc.
           pip install pyezvizapi cryptography pycryptodome
       - name: mypy
-        # Use pyproject.toml's ``[tool.mypy]`` config so ``files`` and
-        # the ``cpd7/`` ``exclude`` apply (research code, has its own
-        # tests upstream).
-        run: mypy --config-file pyproject.toml
+        # First-iteration policy: report findings but don't gate merges
+        # while the codebase grows its type coverage.  The step always
+        # exits 0 — findings still surface in the job log.  Flip to a
+        # hard failure once the integration is fully typed.
+        run: |
+          mypy --config-file pyproject.toml \
+            || echo "::warning::mypy reported issues (non-blocking — see step output)"
 
   # ── 4. Unit tests + coverage ──────────────────────────────────────
   test:
