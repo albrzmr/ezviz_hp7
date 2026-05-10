@@ -1,6 +1,6 @@
 [project]
 name = "ezviz_hp7_integration"
-version = "0.8.3"
+version = "0.8.4"
 description = "Home Assistant custom integration for EZVIZ HP7 / CP7 doorbells"
 readme = "README.md"
 license = { file = "LICENSE" }
