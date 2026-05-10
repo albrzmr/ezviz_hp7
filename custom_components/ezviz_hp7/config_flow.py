@@ -242,7 +242,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             **(self._cached_creds or {}),
             CONF_SERIAL: self._selected_serial,
         }
-        title = f"EZVIZ HP7 ({self._selected_serial})"
+        title = f"EZVIZ HP7 / CP7 ({self._selected_serial})"
         return self.async_create_entry(title=title, data=data)
 
 
