@@ -197,6 +197,9 @@ Useful log markers:
 Pull requests and issues welcome.  Bugs, feature ideas, log dumps for new
 firmware versions all useful.
 
+The next big feature on the menu is **two-way audio** for the intercom —
+see [ROADMAP.md](ROADMAP.md) for the technical scope and current state.
+
 ---
 
 ## Credits
