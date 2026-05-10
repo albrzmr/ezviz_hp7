@@ -1,13 +1,22 @@
 """EZVIZ HP7/CP7 API client."""
+
 from __future__ import annotations
 
 import logging
 import time
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from .pylocalapi.client import EzvizClient
 from .pylocalapi.camera import EzvizCamera
 from .pylocalapi.cas import EzvizCAS
+from .pylocalapi.client import EzvizClient
+from .pylocalapi.exceptions import (
+    EzvizAuthTokenExpired,
+    EzvizAuthVerificationCode,
+    HTTPError,
+    InvalidHost,
+    InvalidURL,
+    PyEzvizError,
+)
 
 if TYPE_CHECKING:
     from .stats import ActivityStats
@@ -43,7 +52,7 @@ class Hp7Api:
         password: str | None = None,
         region: str = "eu",
         token: dict[str, Any] | None = None,
-        stats: "ActivityStats | None" = None,
+        stats: ActivityStats | None = None,
     ) -> None:
         """Initialize EZVIZ API client.
 
@@ -103,7 +112,15 @@ class Hp7Api:
 
             if not self._token:
                 self._login_and_store_token()
-        except Exception as exc:
+        except (
+            PyEzvizError,
+            HTTPError,
+            InvalidHost,
+            InvalidURL,
+            ValueError,
+            KeyError,
+            OSError,
+        ) as exc:
             _LOGGER.error("Failed to initialize EzvizClient: %s", exc)
             raise RuntimeError(f"Failed to initialize EZVIZ client: {exc}") from exc
 
@@ -122,7 +139,9 @@ class Hp7Api:
             elapsed = time.monotonic() - t0
             _LOGGER.info(
                 "[EZVIZ-AUTH] cloud login OK (%.0f ms, account=%s, region=%s)",
-                elapsed * 1000, self._username, self._region,
+                elapsed * 1000,
+                self._username,
+                self._region,
             )
             if self._stats is not None:
                 self._stats.cloud_logins += 1
@@ -175,7 +194,9 @@ class Hp7Api:
                 self.model = "CP7"
                 _LOGGER.debug("Device %s detected as CP7", serial)
             else:
-                _LOGGER.debug("Device %s detected as %s (sub_cat=%s)", serial, self.model, sub_cat)
+                _LOGGER.debug(
+                    "Device %s detected as %s (sub_cat=%s)", serial, self.model, sub_cat
+                )
         except (KeyError, AttributeError, ValueError) as exc:
             _LOGGER.debug("Failed to detect capabilities for %s: %s", serial, exc)
 
@@ -208,7 +229,9 @@ class Hp7Api:
                     if self._stats is not None:
                         self._stats.aes_cache_hits += 1
                     _LOGGER.debug(
-                        "[EZVIZ-AES] cache HIT for %s (age=%.0fs)", bare, age,
+                        "[EZVIZ-AES] cache HIT for %s (age=%.0fs)",
+                        bare,
+                        age,
                     )
                     return key
 
@@ -225,8 +248,21 @@ class Hp7Api:
                 tok = self._client.login()
                 if tok:
                     self._token = tok
-            except Exception as exc:  # noqa: BLE001
-                _LOGGER.debug("[EZVIZ-AES] token refresh failed before AES fetch: %s", exc)
+            except (
+                PyEzvizError,
+                HTTPError,
+                InvalidHost,
+                InvalidURL,
+                EzvizAuthTokenExpired,
+                EzvizAuthVerificationCode,
+                ValueError,
+                KeyError,
+                OSError,
+            ) as exc:
+                _LOGGER.debug(
+                    "[EZVIZ-AES] token refresh failed before AES fetch: %s",
+                    exc,
+                )
 
         if not self._token:
             raise RuntimeError("no cloud token available")
@@ -243,7 +279,7 @@ class Hp7Api:
         t0 = time.monotonic()
         try:
             key = _try_once()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             if self._stats is not None:
                 self._stats.errors_cas += 1
             _LOGGER.warning(
@@ -255,7 +291,7 @@ class Hp7Api:
                 self._login_and_store_token()
                 if self._stats is not None:
                     self._stats.cloud_relogins += 1
-            except Exception as relog_exc:  # noqa: BLE001
+            except Exception as relog_exc:
                 if self._stats is not None:
                     self._stats.errors_cas += 1
                 raise RuntimeError(
@@ -277,7 +313,9 @@ class Hp7Api:
             )
         self._aes_cache[bare] = (key_bytes, time.monotonic())
         _LOGGER.info(
-            "[EZVIZ-AES] EUCAS fetch OK for %s (%.0f ms)", bare, elapsed * 1000,
+            "[EZVIZ-AES] EUCAS fetch OK for %s (%.0f ms)",
+            bare,
+            elapsed * 1000,
         )
         return key_bytes
 
@@ -314,7 +352,15 @@ class Hp7Api:
             return serial
         try:
             dev = self._client.get_device_infos(serial)
-        except Exception as exc:  # noqa: BLE001
+        except (
+            PyEzvizError,
+            HTTPError,
+            InvalidHost,
+            InvalidURL,
+            ValueError,
+            KeyError,
+            OSError,
+        ) as exc:
             _LOGGER.debug("get_device_infos failed for %s: %s", serial, exc)
             return serial
 
@@ -345,7 +391,16 @@ class Hp7Api:
 
         try:
             devices = self._client.get_device_infos()
-        except (KeyError, AttributeError, ValueError) as exc:
+        except (
+            PyEzvizError,
+            HTTPError,
+            InvalidHost,
+            InvalidURL,
+            KeyError,
+            AttributeError,
+            ValueError,
+            OSError,
+        ) as exc:
             _LOGGER.warning("Failed to list devices: %s", exc)
             return {}
 
@@ -360,7 +415,7 @@ class Hp7Api:
         if self._client:
             try:
                 self._client.logout()
-            except Exception as exc:
+            except (PyEzvizError, HTTPError, OSError) as exc:
                 _LOGGER.debug("Error during logout: %s", exc)
             finally:
                 self._client = None
@@ -383,10 +438,12 @@ class Hp7Api:
         user_id = self._token.get("username") or self._username
         try:
             self._client.remote_unlock(serial, user_id, lock_no)
-        except Exception as exc:  # noqa: BLE001 — pyezvizapi raises various types
+        except Exception as exc:
             _LOGGER.warning(
                 "Remote unlock failed (serial=%s, lock_no=%s): %s",
-                serial, lock_no, exc,
+                serial,
+                lock_no,
+                exc,
             )
             return False
         _LOGGER.info("Remote unlock OK (serial=%s, lock_no=%s)", serial, lock_no)

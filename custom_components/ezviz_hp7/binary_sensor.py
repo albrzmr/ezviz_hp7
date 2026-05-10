@@ -1,12 +1,13 @@
 """EZVIZ HP7 binary sensor entities."""
+
 from __future__ import annotations
 
 import logging
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.binary_sensor import (
-    BinarySensorEntity,
     BinarySensorDeviceClass,
+    BinarySensorEntity,
 )
 from homeassistant.core import callback
 from homeassistant.helpers.entity import DeviceInfo
@@ -15,9 +16,11 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
+from .helpers import get_device_info
 
 if TYPE_CHECKING:
     from homeassistant.helpers.event import CALLBACK_TYPE
+
     from .coordinator import Hp7Coordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -76,10 +79,10 @@ ALARM_MAP: list[tuple[list[str], str, str, BinarySensorDeviceClass | None, str]]
 
 def _to_bool(value: Any) -> bool:
     """Convert various types to boolean.
-    
+
     Args:
         value: Value to convert.
-        
+
     Returns:
         Boolean representation of the value.
     """
@@ -96,7 +99,7 @@ def _to_bool(value: Any) -> bool:
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     """Set up EZVIZ HP7 binary sensor entities.
-    
+
     Args:
         hass: Home Assistant instance.
         entry: Config entry.
@@ -142,7 +145,7 @@ class Hp7BinarySimple(CoordinatorEntity, BinarySensorEntity):
         device_class: BinarySensorDeviceClass,
     ) -> None:
         """Initialize binary sensor entity.
-        
+
         Args:
             coordinator: Data coordinator.
             serial: Device serial number.
@@ -166,18 +169,13 @@ class Hp7BinarySimple(CoordinatorEntity, BinarySensorEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Return device information."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._serial)},
-            name=f"EZVIZ HP7 ({self._serial})",
-            manufacturer="EZVIZ",
-            model="HP7",
-        )
+        """Return device information (shared across all platforms)."""
+        return get_device_info(self._serial, getattr(self.coordinator, "api", None))
 
 
 class Hp7BinaryAlarm(CoordinatorEntity, BinarySensorEntity):
     """Binary sensor that pulses briefly when alarm is triggered.
-    
+
     This sensor stays ON for PULSE_SECONDS after detecting a matching alarm,
     then returns to OFF. This is useful for automations that react to events.
     """
@@ -194,7 +192,7 @@ class Hp7BinaryAlarm(CoordinatorEntity, BinarySensorEntity):
         icon: str,
     ) -> None:
         """Initialize alarm binary sensor entity.
-        
+
         Args:
             coordinator: Data coordinator.
             serial: Device serial number.
@@ -236,7 +234,7 @@ class Hp7BinaryAlarm(CoordinatorEntity, BinarySensorEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle coordinator data update event.
-        
+
         Detects new alarms and triggers pulse on matching sensor.
         """
         data = self.coordinator.data or {}
@@ -253,8 +251,8 @@ class Hp7BinaryAlarm(CoordinatorEntity, BinarySensorEntity):
             self._last_trigger = dt_util.utcnow()
             self._schedule_state_update()
             _LOGGER.debug(
-                "Alarm triggered for %s: %s (%s)", 
-                self._attr_translation_key, 
+                "Alarm triggered for %s: %s (%s)",
+                self._attr_translation_key,
                 current_alarm,
                 self._serial,
             )
@@ -263,10 +261,5 @@ class Hp7BinaryAlarm(CoordinatorEntity, BinarySensorEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Return device information."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._serial)},
-            name=f"EZVIZ HP7 ({self._serial})",
-            manufacturer="EZVIZ",
-            model="HP7",
-        )
+        """Return device information (shared across all platforms)."""
+        return get_device_info(self._serial, getattr(self.coordinator, "api", None))

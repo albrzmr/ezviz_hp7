@@ -10,6 +10,7 @@ This bypasses HA's HLS muxer entirely (which adds 6-9 s of buffering for
 HLS segmentation) and gives sub-second glass-to-glass latency, at the
 cost of one ffmpeg subprocess per active viewer.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -41,10 +42,10 @@ def _build_ffmpeg_cmd(
     quality: int,
 ) -> list[str]:
     """ffmpeg invocation that:
-      - reads MPEG-PS from ``upstream_url`` (our TCP relay),
-      - drops audio,
-      - decodes HEVC and re-encodes to motion JPEG,
-      - emits multipart MJPEG (``mpjpeg`` muxer) to stdout.
+    - reads MPEG-PS from ``upstream_url`` (our TCP relay),
+    - drops audio,
+    - decodes HEVC and re-encodes to motion JPEG,
+    - emits multipart MJPEG (``mpjpeg`` muxer) to stdout.
     """
     # Counter-intuitively, the smallest possible probe gives the fastest
     # cold start AND the cleanest decode for this stream — measured
@@ -55,20 +56,33 @@ def _build_ffmpeg_cmd(
     # mpeg``) so it doesn't try to autodetect on a tiny probe window.
     return [
         "ffmpeg",
-        "-loglevel", "warning",
-        "-f", "mpeg",
-        "-probesize", "32",
-        "-analyzeduration", "0",
-        "-fflags", "+discardcorrupt+nobuffer",
-        "-flags", "low_delay",
-        "-err_detect", "ignore_err",
-        "-i", upstream_url,
+        "-loglevel",
+        "warning",
+        "-f",
+        "mpeg",
+        "-probesize",
+        "32",
+        "-analyzeduration",
+        "0",
+        "-fflags",
+        "+discardcorrupt+nobuffer",
+        "-flags",
+        "low_delay",
+        "-err_detect",
+        "ignore_err",
+        "-i",
+        upstream_url,
         "-an",
-        "-c:v", "mjpeg",
-        "-q:v", str(quality),
-        "-r", str(fps),
-        "-vf", f"scale={width}:{height}",
-        "-f", "mpjpeg",
+        "-c:v",
+        "mjpeg",
+        "-q:v",
+        str(quality),
+        "-r",
+        str(fps),
+        "-vf",
+        f"scale={width}:{height}",
+        "-f",
+        "mpjpeg",
         "pipe:1",
     ]
 
@@ -81,7 +95,7 @@ async def serve_mjpeg(
     width: int,
     height: int,
     quality: int,
-    stats: "ActivityStats | None" = None,
+    stats: ActivityStats | None = None,
 ) -> web.StreamResponse:
     """Stream a continuous MJPEG response back to the HTTP client.
 
@@ -90,7 +104,11 @@ async def serve_mjpeg(
     stdout to ``request``'s response body until either side disconnects.
     """
     cmd = _build_ffmpeg_cmd(
-        upstream_url, fps=fps, width=width, height=height, quality=quality,
+        upstream_url,
+        fps=fps,
+        width=width,
+        height=height,
+        quality=quality,
     )
     if stats is not None:
         stats.mjpeg_sessions += 1
@@ -98,7 +116,12 @@ async def serve_mjpeg(
     peer = request.remote
     _LOGGER.info(
         "[MJPEG] session START client=%s upstream=%s (%dx%d @ %dfps q=%d)",
-        peer, upstream_url, width, height, fps, quality,
+        peer,
+        upstream_url,
+        width,
+        height,
+        fps,
+        quality,
     )
 
     proc = await asyncio.create_subprocess_exec(
@@ -144,12 +167,14 @@ async def serve_mjpeg(
         # shutdown, client closed). Re-raise after cleanup.
         end_reason = "cancelled"
         raise
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         if stats is not None:
             stats.errors_mjpeg += 1
         real_error = exc
         end_reason = f"error:{type(exc).__name__}"
-        _LOGGER.warning("[MJPEG] unexpected session error: %s: %s", type(exc).__name__, exc)
+        _LOGGER.warning(
+            "[MJPEG] unexpected session error: %s: %s", type(exc).__name__, exc
+        )
         raise
     finally:
         await _terminate(proc)
@@ -165,7 +190,9 @@ async def serve_mjpeg(
         duration = time.monotonic() - started_at
         _LOGGER.info(
             "[MJPEG] session END client=%s duration=%.1fs bytes=%d KB/s=%.1f reason=%s",
-            peer, duration, total_bytes,
+            peer,
+            duration,
+            total_bytes,
             (total_bytes / 1024 / duration) if duration > 0 else 0,
             end_reason,
         )
@@ -199,7 +226,7 @@ async def _terminate(proc: asyncio.subprocess.Process) -> None:
         return
     try:
         await asyncio.wait_for(proc.wait(), timeout=_FFMPEG_GRACE)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         _LOGGER.debug("ffmpeg did not exit on SIGTERM, killing")
         try:
             proc.kill()
@@ -207,5 +234,5 @@ async def _terminate(proc: asyncio.subprocess.Process) -> None:
             return
         try:
             await asyncio.wait_for(proc.wait(), timeout=_FFMPEG_GRACE)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass

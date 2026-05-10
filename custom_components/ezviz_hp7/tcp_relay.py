@@ -23,6 +23,7 @@ seem to like multiple concurrent ``PLAY`` sockets.  Multiple downstream
 clients are not currently supported either; HA's stream component
 deduplicates viewers anyway.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -36,6 +37,7 @@ from .cpd7 import Cpd7LanClient, StreamDecoder
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
+
     from .stats import ActivityStats
 
 _LOGGER = logging.getLogger(__name__)
@@ -73,12 +75,12 @@ class CpdMpegPsRelay:
 
     def __init__(
         self,
-        hass: "HomeAssistant",
+        hass: HomeAssistant,
         host_provider: Callable[[], str],
         related_provider: Callable[[], str],
         get_aes_key: KeyFetcher,
         bind_host: str = "127.0.0.1",
-        stats: "ActivityStats | None" = None,
+        stats: ActivityStats | None = None,
     ) -> None:
         self._hass = hass
         self._host_provider = host_provider
@@ -119,7 +121,9 @@ class CpdMpegPsRelay:
         if self._server is not None:
             return
         self._server = await asyncio.start_server(
-            self._handle_client, host=self._bind, port=0,
+            self._handle_client,
+            host=self._bind,
+            port=0,
         )
         sockets = self._server.sockets
         if not sockets:
@@ -133,7 +137,7 @@ class CpdMpegPsRelay:
         self._server.close()
         try:
             await self._server.wait_closed()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         self._server = None
         self._port = 0
@@ -141,7 +145,8 @@ class CpdMpegPsRelay:
             await self._teardown_upstream()
 
     async def async_prewarm(
-        self, hold_seconds: float = _DEFAULT_WARM_HOLD_SECONDS,
+        self,
+        hold_seconds: float = _DEFAULT_WARM_HOLD_SECONDS,
         trigger: str = "manual",
     ) -> None:
         """Open / refresh an upstream session in advance of any client.
@@ -165,30 +170,37 @@ class CpdMpegPsRelay:
                     self._stats.prewarms_skipped_already_warm += 1
                 _LOGGER.info(
                     "[RELAY] prewarm extension (trigger=%s, hold=%.0fs, already warm)",
-                    trigger, hold_seconds,
+                    trigger,
+                    hold_seconds,
                 )
                 self._reschedule_close(hold_seconds)
                 return
             try:
                 await self._spin_up_upstream()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 if self._stats is not None:
                     self._stats.errors_lan += 1
                     self._stats.lan_sessions_failed += 1
                 _LOGGER.warning(
-                    "[RELAY] prewarm FAILED (trigger=%s): %s", trigger, exc,
+                    "[RELAY] prewarm FAILED (trigger=%s): %s",
+                    trigger,
+                    exc,
                 )
                 await self._teardown_upstream()
                 return
             self._reschedule_close(hold_seconds)
             _LOGGER.info(
-                "[RELAY] prewarm OK (trigger=%s, hold=%.0fs)", trigger, hold_seconds,
+                "[RELAY] prewarm OK (trigger=%s, hold=%.0fs)",
+                trigger,
+                hold_seconds,
             )
 
     # ── Connection handler ─────────────────────────────────────────────────
 
     async def _handle_client(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
     ) -> None:
         peer = writer.get_extra_info("peername")
         client_started_at = time.monotonic()
@@ -208,25 +220,29 @@ class CpdMpegPsRelay:
             else:
                 try:
                     await self._spin_up_upstream()
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     if self._stats is not None:
                         self._stats.errors_lan += 1
                         self._stats.lan_sessions_failed += 1
                     _LOGGER.error(
-                        "[RELAY] LAN start FAILED for %s: %s", peer, exc,
+                        "[RELAY] LAN start FAILED for %s: %s",
+                        peer,
+                        exc,
                     )
                     await self._teardown_upstream()
                     try:
                         writer.close()
                         await writer.wait_closed()
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
                     return
             self._cancel_close()
             self._writer = writer
             _LOGGER.info(
                 "[RELAY] client %s attached (warm=%s, burst=%dB)",
-                peer, attached_warm, len(initial_burst),
+                peer,
+                attached_warm,
+                len(initial_burst),
             )
 
         # Send the initial keyframe-aligned burst, then let the pump
@@ -248,12 +264,14 @@ class CpdMpegPsRelay:
             try:
                 writer.close()
                 await writer.wait_closed()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             duration = time.monotonic() - client_started_at
             _LOGGER.info(
                 "[RELAY] client %s disconnected (duration=%.1fs, warm_attach=%s)",
-                peer, duration, attached_warm,
+                peer,
+                duration,
+                attached_warm,
             )
 
     @staticmethod
@@ -295,7 +313,9 @@ class CpdMpegPsRelay:
 
         aes_key = await self._get_aes_key()
         lan = Cpd7LanClient(
-            host=host, related_device=related, aes_key=aes_key,
+            host=host,
+            related_device=related,
+            aes_key=aes_key,
         )
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lan.start)
@@ -304,7 +324,8 @@ class CpdMpegPsRelay:
         self._decoder = StreamDecoder(lan.ecdh_priv)
         self._buffer = bytearray()
         self._pump_task = asyncio.create_task(
-            self._pump_upstream(), name="cpd7_relay_pump",
+            self._pump_upstream(),
+            name="cpd7_relay_pump",
         )
         self._session_started_at = time.monotonic()
         self._session_bytes = 0
@@ -312,7 +333,9 @@ class CpdMpegPsRelay:
             self._stats.lan_sessions_started += 1
         _LOGGER.info(
             "[RELAY] LAN upstream OPEN host=%s related=%s (setup=%.0f ms)",
-            host, related, (time.monotonic() - t0) * 1000,
+            host,
+            related,
+            (time.monotonic() - t0) * 1000,
         )
 
     async def _teardown_upstream(self) -> None:
@@ -327,7 +350,7 @@ class CpdMpegPsRelay:
             task.cancel()
             try:
                 await task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            except (asyncio.CancelledError, Exception):
                 pass
         lan = self._lan
         self._lan = None
@@ -336,18 +359,20 @@ class CpdMpegPsRelay:
         if lan is not None:
             try:
                 await asyncio.get_running_loop().run_in_executor(None, lan.close)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             duration = (
                 time.monotonic() - self._session_started_at
-                if self._session_started_at else 0.0
+                if self._session_started_at
+                else 0.0
             )
             if self._stats is not None and self._session_started_at:
                 self._stats.lan_session_total_seconds += duration
                 self._stats.lan_session_total_bytes += self._session_bytes
             _LOGGER.info(
                 "[RELAY] LAN upstream CLOSED (duration=%.1fs, bytes=%d, KB/s=%.1f)",
-                duration, self._session_bytes,
+                duration,
+                self._session_bytes,
                 (self._session_bytes / 1024 / duration) if duration > 0 else 0,
             )
             self._session_started_at = 0.0
@@ -389,7 +414,7 @@ class CpdMpegPsRelay:
                             self._writer = None
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             if self._stats is not None:
                 self._stats.errors_relay_pump += 1
             _LOGGER.warning("[RELAY] pump task error: %s", exc)
@@ -440,7 +465,8 @@ class CpdMpegPsRelay:
             return
         loop = asyncio.get_running_loop()
         self._close_handle = loop.call_later(
-            seconds, lambda: asyncio.create_task(self._maybe_close_upstream()),
+            seconds,
+            lambda: asyncio.create_task(self._maybe_close_upstream()),
         )
 
     async def _maybe_close_upstream(self) -> None:

@@ -12,35 +12,37 @@ Options flow (Settings → Devices & Services → EZVIZ HP7 → Configure):
   HEVC, native 25 fps) but ~10-20 s of delay; needs an HEVC-capable
   browser/device (Safari / iOS / Android with hardware decoding).
 """
+
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 from homeassistant.components.camera import Camera, CameraEntityFeature
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.config_entries import ConfigEntry
 
 from .const import (
-    DOMAIN,
     DEFAULT_LIVE_VIEW_MODE,
-    LIVE_VIEW_MJPEG,
+    DOMAIN,
     LIVE_VIEW_HLS,
+    LIVE_VIEW_MJPEG,
     MJPEG_DEFAULT_FPS,
-    MJPEG_DEFAULT_WIDTH,
     MJPEG_DEFAULT_HEIGHT,
     MJPEG_DEFAULT_QUALITY,
+    MJPEG_DEFAULT_WIDTH,
 )
+from .helpers import get_device_info
 from .mjpeg import serve_mjpeg
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
+
     from .coordinator import Hp7Coordinator
     from .tcp_relay import CpdMpegPsRelay
 
@@ -95,13 +97,7 @@ class Hp7Camera(Camera, CoordinatorEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        model = getattr(self.coordinator.api, "model", "HP7")
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._serial)},
-            name=f"EZVIZ {model} ({self._serial})",
-            manufacturer="EZVIZ",
-            model=model,
-        )
+        return get_device_info(self._serial, getattr(self.coordinator, "api", None))
 
     # ── HLS path ──────────────────────────────────────────────────────────
 
@@ -185,20 +181,24 @@ class Hp7Camera(Camera, CoordinatorEntity):
                     return await resp.read()
                 try:
                     error_text = await resp.text()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     error_text = "Unknown error"
                 _LOGGER.warning(
                     "Failed to fetch snapshot for %s: HTTP %s - %s",
-                    self._serial, resp.status, error_text,
+                    self._serial,
+                    resp.status,
+                    error_text,
                 )
                 return None
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             _LOGGER.warning("Timeout fetching snapshot for %s", self._serial)
             return None
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             _LOGGER.warning(
-                "Error fetching snapshot for %s: %s", self._serial, exc,
+                "Error fetching snapshot for %s: %s",
+                self._serial,
+                exc,
             )
             return None
 

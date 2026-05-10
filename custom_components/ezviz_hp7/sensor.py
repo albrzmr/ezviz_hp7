@@ -1,16 +1,18 @@
 """EZVIZ HP7 sensor entities."""
+
 from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from homeassistant.components.sensor import SensorEntity, SensorDeviceClass
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
+from .helpers import get_device_info
 
 if TYPE_CHECKING:
     from .coordinator import Hp7Coordinator
@@ -28,7 +30,9 @@ DIAGNOSTIC_KEYS = {
 }
 
 # Sensor configuration: (key, translation_key, device_class, unit, icon, transform_fn)
-SENSORS: list[tuple[str, str, SensorDeviceClass | None, str | None, str | None, Any]] = [
+SENSORS: list[
+    tuple[str, str, SensorDeviceClass | None, str | None, str | None, Any]
+] = [
     # Identity and basic status
     ("name", "name", None, None, "mdi:label", None),
     ("version", "version", None, None, "mdi:update", None),
@@ -62,7 +66,14 @@ SENSORS: list[tuple[str, str, SensorDeviceClass | None, str | None, str | None, 
         lambda v: "detected" if v in (1, "1", True, "true") else "none",
     ),
     # Last events / diagnostics
-    ("last_alarm_time", "last_alarm_time", SensorDeviceClass.TIMESTAMP, None, "mdi:clock-alert", None),
+    (
+        "last_alarm_time",
+        "last_alarm_time",
+        SensorDeviceClass.TIMESTAMP,
+        None,
+        "mdi:clock-alert",
+        None,
+    ),
     ("alarm_name", "alarm_name", None, None, "mdi:alert", None),
     (
         "seconds_last_trigger",
@@ -86,12 +97,12 @@ SENSORS: list[tuple[str, str, SensorDeviceClass | None, str | None, str | None, 
 
 def _dig(data: dict[str, Any], path: str, default: Any = None) -> Any:
     """Recursively get value from nested dictionary.
-    
+
     Args:
         data: Dictionary to search.
         path: Dot-separated path (e.g., "wifi.signal").
         default: Default value if path not found.
-        
+
     Returns:
         Value at path or default.
     """
@@ -105,7 +116,7 @@ def _dig(data: dict[str, Any], path: str, default: Any = None) -> Any:
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     """Set up EZVIZ HP7 sensor entities.
-    
+
     Args:
         hass: Home Assistant instance.
         entry: Config entry.
@@ -143,7 +154,7 @@ class Hp7Sensor(CoordinatorEntity, SensorEntity):
         transform: Any = None,
     ) -> None:
         """Initialize sensor entity.
-        
+
         Args:
             coordinator: Data coordinator.
             serial: Device serial number.
@@ -176,13 +187,8 @@ class Hp7Sensor(CoordinatorEntity, SensorEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Return device information."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._serial)},
-            name=f"EZVIZ HP7 ({self._serial})",
-            manufacturer="EZVIZ",
-            model="HP7",
-        )
+        """Return device information (shared across all platforms)."""
+        return get_device_info(self._serial, getattr(self.coordinator, "api", None))
 
     @property
     def native_value(self) -> Any:

@@ -1,9 +1,10 @@
 """Data update coordinator for EZVIZ HP7."""
+
 from __future__ import annotations
 
 import logging
 from datetime import timedelta
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
@@ -15,6 +16,7 @@ from .const import UPDATE_INTERVAL_SEC
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
+
     from .api import Hp7Api
     from .stats import ActivityStats
 
@@ -26,11 +28,11 @@ class Hp7Coordinator(DataUpdateCoordinator):
 
     def __init__(
         self,
-        hass: "HomeAssistant",
-        entry: "ConfigEntry",
-        api: "Hp7Api",
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        api: Hp7Api,
         serial: str,
-        stats: "ActivityStats | None" = None,
+        stats: ActivityStats | None = None,
     ) -> None:
         """Initialize the coordinator.
 
@@ -61,7 +63,8 @@ class Hp7Coordinator(DataUpdateCoordinator):
             self._stats.cloud_polls += 1
         try:
             return await self.hass.async_add_executor_job(
-                self.api.get_status, self.serial,
+                self.api.get_status,
+                self.serial,
             )
-        except Exception as exc:  # noqa: BLE001 — pyezvizapi raises various types
+        except Exception as exc:
             raise UpdateFailed(f"EZVIZ HP7 poll failed: {exc}") from exc

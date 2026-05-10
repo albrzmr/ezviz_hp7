@@ -14,6 +14,7 @@ up in ``home-assistant.log`` ready for ``grep`` / ``wc -l``.
 All counters are simple ``int`` fields — no synchronisation needed
 because everything runs on the asyncio event loop.
 """
+
 from __future__ import annotations
 
 import logging
@@ -30,14 +31,14 @@ class ActivityStats:
     started_at: float = field(default_factory=time.time)
 
     # ── Cloud / EUCAS ─────────────────────────────────────────────────
-    cloud_logins: int = 0           # initial logins (no cached token)
-    cloud_relogins: int = 0         # forced re-logins after a CAS error
-    cloud_polls: int = 0            # coordinator updates (≈ pyezvizapi calls)
+    cloud_logins: int = 0  # initial logins (no cached token)
+    cloud_relogins: int = 0  # forced re-logins after a CAS error
+    cloud_polls: int = 0  # coordinator updates (≈ pyezvizapi calls)
 
-    aes_cache_hits: int = 0         # ``fetch_lan_aes_key`` served from cache
-    aes_cache_misses: int = 0       # ``fetch_lan_aes_key`` had to call EUCAS
-    aes_force_refreshes: int = 0    # ``force=True`` (background warm-up etc.)
-    aes_invalidations: int = 0      # cache cleared (probable re-pairing)
+    aes_cache_hits: int = 0  # ``fetch_lan_aes_key`` served from cache
+    aes_cache_misses: int = 0  # ``fetch_lan_aes_key`` had to call EUCAS
+    aes_force_refreshes: int = 0  # ``force=True`` (background warm-up etc.)
+    aes_invalidations: int = 0  # cache cleared (probable re-pairing)
 
     # ── LAN / streaming ──────────────────────────────────────────────
     lan_sessions_started: int = 0
@@ -76,7 +77,8 @@ class ActivityStats:
         uptime = snap.pop("started_at")
         # Only show counters that actually moved (keeps the line short).
         nonzero = {
-            k: v for k, v in snap.items()
+            k: v
+            for k, v in snap.items()
             if (isinstance(v, (int, float)) and v) or not isinstance(v, (int, float))
         }
         bytes_total = nonzero.pop("lan_session_total_bytes", 0)
