@@ -1,30 +1,57 @@
 [project]
 name = "ezviz_hp7_integration"
-version = "0.7.2"
+version = "0.8.2"
 description = "Home Assistant custom integration for EZVIZ HP7 / CP7 doorbells"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 authors = [{ name = "albrzmr" }]
 keywords = ["home-assistant", "ezviz", "hp7", "cp7", "doorbell"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Framework :: Home Assistant",
     "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
 
-# This project ships as a Home Assistant custom integration, not a
-# pip-installable package — there is no ``[tool.setuptools]`` /
-# ``[build-system]`` section on purpose.  ``pyproject.toml`` exists so
-# ruff and pytest pick up consistent config from a single source.
+# Runtime dependencies are declared in ``manifest.json`` (HA installs
+# them via its own resolver), not here.  The integration is shipped as
+# a custom-component drop-in, not as a pip-installable package.
+
+[project.optional-dependencies]
+# ``pip install -e ".[dev]"`` pulls every tool the CI uses, mirrored
+# in ``.pre-commit-config.yaml`` and ``.github/workflows/ci.yml``.
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "pytest-homeassistant-custom-component",
+    "ruff==0.15.12",
+    "mypy",
+    "pre-commit",
+]
+
+# A minimal ``[build-system]`` keeps ``pip install -e .`` working so
+# CI can resolve ``[project.optional-dependencies]``.  We're not
+# really building a package — there is no ``[tool.setuptools]``
+# block so setuptools picks the default which produces an empty
+# wheel with no top-level package.  That's fine for our purposes.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# Tell setuptools that the only "package" is a placeholder so
+# ``pip install -e .`` doesn't try to auto-discover ``custom_components``
+# (which doesn't have an ``__init__.py`` at its top level on purpose
+# — that's HA's convention).
+py-modules = []
 
 # ── ruff: linter + formatter ────────────────────────────────────────
 [tool.ruff]
 line-length = 88
-target-version = "py311"
+target-version = "py312"
 extend-exclude = [
     # Research-vendored crypto / wire protocol code — formatted to
     # match the ``docs/cpd7-stream-recipe`` source of truth in the
@@ -35,13 +62,17 @@ extend-exclude = [
 [tool.ruff.lint]
 select = [
     "E",     # pycodestyle errors
-    "W",     # pycodestyle warnings
     "F",     # pyflakes
+    "W",     # pycodestyle warnings
     "I",     # isort
-    "B",     # flake8-bugbear
-    "ASYNC", # asyncio bug patterns
+    "N",     # pep8-naming
     "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "A",     # flake8-builtins (don't shadow open / id / type …)
+    "C4",    # flake8-comprehensions
     "SIM",   # flake8-simplify
+    "TCH",   # flake8-type-checking
+    "ASYNC", # asyncio anti-patterns
     "RUF",   # ruff-specific
     "PERF",  # perflint
 ]
@@ -56,18 +87,46 @@ ignore = [
     # a per-line ``# noqa: BLE001`` where it's wanted.
     "BLE001",
     # ``try/except/pass`` reads more naturally than
-    # ``with contextlib.suppress(...)`` in cleanup paths where the
-    # exception type already documents the suppressed condition.
+    # ``contextlib.suppress`` in cleanup paths where the exception
+    # type already documents the suppressed condition.
     "SIM105",
+    # ``TC002`` wants every Home Assistant import that's only used in
+    # type hints to be guarded by ``if TYPE_CHECKING:``.  HA's own
+    # integrations don't follow this religiously and the runtime
+    # cost is negligible — keep the imports unconditional so they
+    # also work as runtime references (e.g. from inside isinstance
+    # checks added later).
+    "TC002",
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Tests routinely use bare asserts and may shadow names.
-"tests/**" = ["B011"]
+# Tests routinely use bare asserts, fixtures named after the module
+# they import, and ``setdefault`` patterns that ``ruff`` flags
+# differently than production code.  ``N802`` is also relaxed because
+# test names mirror identifiers like ``HP7`` / ``CP7`` which the
+# pep8-naming linter would otherwise flag as not-lowercase.
+"tests/**" = ["B011", "N802", "N806"]
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+# ── mypy: static type checking ────────────────────────────────────
+[tool.mypy]
+python_version = "3.12"
+files = ["custom_components/ezviz_hp7"]
+exclude = [
+    # Same rationale as the ruff exclude — vendored research code.
+    "custom_components/ezviz_hp7/cpd7",
+]
+# First-iteration setup: be permissive while the codebase grows
+# coverage.  Tighten these gradually (drop ``ignore_missing_imports``,
+# enable ``strict``) as type stubs are added for ``homeassistant.*``
+# and ``pyezvizapi``.
+ignore_missing_imports = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
 
 # ── pytest ──────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
@@ -79,4 +138,28 @@ filterwarnings = [
     # our control, drowns out useful test output.
     "ignore::DeprecationWarning:urllib3",
     "ignore::DeprecationWarning:cryptography",
+]
+
+# ── coverage.py ───────────────────────────────────────────────────
+[tool.coverage.run]
+source = ["custom_components/ezviz_hp7"]
+omit = [
+    # cpd7 is research code; it has its own tests in the private
+    # research repo against captured ``.bin`` fixtures.
+    "custom_components/ezviz_hp7/cpd7/*",
+    "tests/*",
+]
+branch = true
+
+[tool.coverage.report]
+# Don't fail CI on coverage thresholds yet — set this to a real
+# percentage once the integration's coverage stabilises.
+fail_under = 0
+show_missing = true
+skip_covered = false
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "@(abc\\.)?abstractmethod",
+    "raise NotImplementedError",
+    "pragma: no cover",
 ]
