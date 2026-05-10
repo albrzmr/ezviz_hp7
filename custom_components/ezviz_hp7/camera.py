@@ -120,18 +120,18 @@ class Hp7Camera(Camera, CoordinatorEntity):
         """Camera is available whenever the doorbell is online and reachable.
 
         Defers to ``Camera.available`` (which checks the HLS stream
-        when in HLS mode) but additionally requires the cloud
-        coordinator to have a known LAN IP and a non-offline status —
-        otherwise the dashboard would show ``streaming`` for an
-        unreachable doorbell.
+        when in HLS mode) but additionally requires the cloud to
+        report the device as online — otherwise the dashboard would
+        show ``streaming`` for an unreachable doorbell.
+
+        ``status`` comes from the cloud as a raw value (``1`` / ``0``
+        as ``int`` or string), so it's normalised here the same way
+        the status sensor does.
         """
         if not super().available:
             return False
-        data = self.coordinator.data or {}
-        status = (data.get("status") or "").lower()
-        if status and status in {"offline", "unreachable"}:
-            return False
-        return bool(data.get("local_ip"))
+        status = (self.coordinator.data or {}).get("status")
+        return status in (1, "1", True, "online")
 
     @property
     def device_info(self) -> DeviceInfo:
