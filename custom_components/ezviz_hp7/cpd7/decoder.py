@@ -167,6 +167,8 @@ class StreamDecoder:
     def _decrypt_data_chunk(self, chunk: bytes) -> bytes:
         if len(chunk) < 4:
             return b""
+        if self._chacha20_key is None:
+            return b""
         pkt = chunk[4:]                          # skip 4-byte outer prefix
         if pkt[:2] != b"\x24\x02":
             return b""

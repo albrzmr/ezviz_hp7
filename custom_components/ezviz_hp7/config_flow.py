@@ -57,7 +57,7 @@ def _looks_like_long_serial(serial: str) -> bool:
     return ("-" in serial) or (len(serial) >= 12)
 
 
-class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
     """Config flow for EZVIZ HP7 integration."""
 
     VERSION = 1
@@ -149,12 +149,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
 
             # Choose which serial to show user (prefer long serials)
+            shown_serial: str | None
             if _looks_like_long_serial(serial_key):
                 shown_serial = serial_key
             else:
-                shown_serial = (
-                    info.get("serial_long") or info.get("full_serial") or None
-                )
+                shown_serial = info.get("serial_long") or info.get("full_serial")
 
             # Skip empty serials to avoid duplicates
             if not shown_serial:

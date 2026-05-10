@@ -30,6 +30,14 @@ dev = [
     "ruff==0.15.12",
     "mypy",
     "pre-commit",
+    # Runtime deps that the integration declares in ``manifest.json``.
+    # CI's pytest job runs ``pip install -e ".[dev]"`` and then imports
+    # ``pylocalapi.cas`` (which pulls ``pyezvizapi.exceptions``), so
+    # these have to be in the test environment too.
+    "pyezvizapi==1.0.4.9",
+    "cryptography",
+    "pycryptodome",
+    "xmltodict",
 ]
 
 # A minimal ``[build-system]`` keeps ``pip install -e .`` working so
@@ -57,6 +65,8 @@ extend-exclude = [
     # match the ``docs/cpd7-stream-recipe`` source of truth in the
     # private research repo.
     "custom_components/ezviz_hp7/cpd7",
+    # Untracked research bridge — not shipped with the integration.
+    "cpd7_bridge",
 ]
 
 [tool.ruff.lint]

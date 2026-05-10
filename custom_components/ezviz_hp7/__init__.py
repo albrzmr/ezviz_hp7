@@ -133,14 +133,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _aes_key_provider() -> bytes:
         return await hass.async_add_executor_job(api.fetch_lan_aes_key, serial)
 
-    relay = CpdMpegPsRelay(
-        hass,
-        host_provider=_host_provider,
-        related_provider=_related_provider,
-        get_aes_key=_aes_key_provider,
-        stats=stats,
-    )
+    relay: CpdMpegPsRelay | None
     try:
+        relay = CpdMpegPsRelay(
+            hass,
+            host_provider=_host_provider,
+            related_provider=_related_provider,
+            get_aes_key=_aes_key_provider,
+            stats=stats,
+        )
         await relay.async_start()
     except Exception as exc:
         _LOGGER.warning("CPD7 relay failed to start: %s — live stream disabled", exc)

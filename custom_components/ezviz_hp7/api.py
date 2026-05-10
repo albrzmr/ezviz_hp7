@@ -315,7 +315,7 @@ class Hp7Api:
 
         t0 = time.monotonic()
         try:
-            key = _try_once()
+            key_str = _try_once()
         except Exception as exc:
             if self._stats is not None:
                 self._stats.errors_cas += 1
@@ -334,12 +334,12 @@ class Hp7Api:
                 raise RuntimeError(
                     f"AES fetch failed and re-login failed: {relog_exc}"
                 ) from relog_exc
-            key = _try_once()
+            key_str = _try_once()
 
         elapsed = time.monotonic() - t0
-        if not key or len(key) != 16:
-            raise RuntimeError(f"invalid AES key from EUCAS: {key!r}")
-        key_bytes = key.encode("ascii")
+        if not key_str or len(key_str) != 16:
+            raise RuntimeError(f"invalid AES key from EUCAS: {key_str!r}")
+        key_bytes = key_str.encode("ascii")
         # Detect a key rotation (re-pairing) — useful signal for the user.
         prior = self._aes_cache.get(bare)
         if prior is not None and prior[0] != key_bytes:

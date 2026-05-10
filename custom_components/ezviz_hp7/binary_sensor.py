@@ -43,7 +43,7 @@ PULSE_SECONDS = 3
 SIMPLE_MAP: list[tuple[str, str, BinarySensorDeviceClass]] = []
 
 # Alarm sensors that trigger for PULSE_SECONDS when specific alarm names appear
-ALARM_MAP: list[tuple[list[str], str, str, BinarySensorDeviceClass | None, str]] = [
+ALARM_MAP: list[tuple[list[str], str, BinarySensorDeviceClass | None, str]] = [
     (
         ["Smart Detection Alarm"],
         "smart_detection_alarm",
