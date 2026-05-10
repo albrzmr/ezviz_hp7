@@ -1,22 +1,33 @@
-"""asyncio TCP relay that bridges HA Stream component → upstream LAN pipeline.
+"""Local TCP relay with optional pre-warmed upstream session.
 
-HA's Stream component spawns ffmpeg with whatever URL ``camera.stream_source``
-returns.  We bind a TCP server on a random localhost port and have ffmpeg
-connect to ``tcp://127.0.0.1:N``.  On every accepted connection we run a
-fresh upstream session:
+The relay binds an ``asyncio.start_server`` on localhost and exposes a
+URL of the form ``tcp://127.0.0.1:N``.  A consumer (HA's stream worker
+for HLS, or a per-viewer ffmpeg subprocess for MJPEG) connects to it
+and receives a continuous decrypted MPEG-PS stream.
 
-    fetch AES key (cmd 0x2001 → CAS)
-    open LAN sockets, INIT/INVITE/PLAY, ECDH handshake
-    pump decrypted MPEG-PS bytes back to the client socket
+Two upstream lifecycles coexist:
 
-When the client (ffmpeg) disconnects we tear the upstream session down.  The
-relay accepts connections sequentially — HA's Stream component dedup's
-consumers so this is fine in practice.
+- **Lazy** (default): when the first client connects, the relay opens a
+  fresh upstream session — fetches the AES-128 control key from EUCAS,
+  runs INIT/INVITE/PLAY against the doorbell, derives the per-session
+  ChaCha20 key, and starts forwarding decoded bytes.
+- **Pre-warmed**: ``async_prewarm()`` opens the same upstream session
+  *eagerly* (typically from a doorbell ring / motion event in
+  ``__init__.py``).  The pump task accumulates decoded MPEG-PS bytes in
+  a keyframe-aligned ring buffer.  When the real client connects within
+  the warm window, the buffered bytes are flushed first and live bytes
+  follow with no extra setup latency.
+
+Only one upstream LAN session exists at a time — the doorbell does not
+seem to like multiple concurrent ``PLAY`` sockets.  Multiple downstream
+clients are not currently supported either; HA's stream component
+deduplicates viewers anyway.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import struct
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
@@ -28,16 +39,39 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
-# Type of the callback that returns the AES-128 control key (16 ASCII bytes)
+# Async callback returning the 16-byte AES-128 control key.
 KeyFetcher = Callable[[], Awaitable[bytes]]
 
 
+# Buffer trim threshold.  Once the warm-session ring buffer grows past
+# this many bytes, we discard everything before the most recent HEVC
+# keyframe (VPS NAL).  4 MB ≈ 25 s at 150 KB/s, more than enough head
+# start for any realistic prewarm-to-connect window.
+_BUFFER_TRIM_TARGET = 4 * 1024 * 1024
+
+# Markers used for keyframe-aligned trimming.  Both must match the
+# patterns the StreamDecoder gates on (see cpd7/decoder.py).
+_HEVC_VPS_4B = b"\x00\x00\x00\x01\x40\x01"
+_HEVC_VPS_3B = b"\x00\x00\x01\x40\x01"
+_MPEG_PS_PACK = b"\x00\x00\x01\xba"
+
+# How long to keep a warm session running with no client attached
+# before tearing it down.  60 s comfortably covers the time between a
+# doorbell event and the user opening the dashboard.
+_DEFAULT_WARM_HOLD_SECONDS = 60.0
+
+# Grace period after the last client disconnects, before we close the
+# upstream session.  If a new client connects within this window
+# (e.g. HA reloads its stream worker), we reuse the existing session.
+_POST_CLIENT_GRACE_SECONDS = 5.0
+
+
 class CpdMpegPsRelay:
-    """Local TCP server feeding MPEG-PS to ffmpeg."""
+    """Localhost TCP relay with at most one active upstream LAN session."""
 
     def __init__(
         self,
-        hass: HomeAssistant,
+        hass: "HomeAssistant",
         host_provider: Callable[[], str],
         related_provider: Callable[[], str],
         get_aes_key: KeyFetcher,
@@ -48,9 +82,23 @@ class CpdMpegPsRelay:
         self._related_provider = related_provider
         self._get_aes_key = get_aes_key
         self._bind = bind_host
+
         self._server: asyncio.base_events.Server | None = None
         self._port: int = 0
-        self._lock = asyncio.Lock()  # serialise concurrent upstreams
+
+        # Upstream-session state.  All of these are owned by the
+        # asyncio event loop; we serialise writes to them with
+        # ``_state_lock`` so that ``async_prewarm`` and ``_handle_client``
+        # cannot race.
+        self._state_lock = asyncio.Lock()
+        self._lan: Cpd7LanClient | None = None
+        self._decoder: StreamDecoder | None = None
+        self._pump_task: asyncio.Task | None = None
+        self._buffer = bytearray()
+        self._writer: asyncio.StreamWriter | None = None
+        self._close_handle: asyncio.TimerHandle | None = None
+
+    # ── Public API ─────────────────────────────────────────────────────────
 
     @property
     def port(self) -> int:
@@ -64,15 +112,13 @@ class CpdMpegPsRelay:
         if self._server is not None:
             return
         self._server = await asyncio.start_server(
-            self._handle_client, host=self._bind, port=0
+            self._handle_client, host=self._bind, port=0,
         )
         sockets = self._server.sockets
         if not sockets:
             raise RuntimeError("CPD7 relay bound to no socket")
         self._port = sockets[0].getsockname()[1]
-        _LOGGER.info(
-            "CPD7 relay listening on %s:%d", self._bind, self._port,
-        )
+        _LOGGER.info("CPD7 relay listening on %s:%d", self._bind, self._port)
 
     async def async_stop(self) -> None:
         if self._server is None:
@@ -84,87 +130,272 @@ class CpdMpegPsRelay:
             pass
         self._server = None
         self._port = 0
+        async with self._state_lock:
+            await self._teardown_upstream()
 
-    # ── Connection handler ────────────────────────────────────────────────
+    async def async_prewarm(
+        self, hold_seconds: float = _DEFAULT_WARM_HOLD_SECONDS,
+    ) -> None:
+        """Open / refresh an upstream session in advance of any client.
+
+        Called when a doorbell event suggests the user is about to open
+        the live view.  If a session is already running the auto-close
+        timer is just renewed.
+        """
+        async with self._state_lock:
+            if self._is_pump_alive():
+                _LOGGER.debug(
+                    "CPD7 relay: prewarm refresh (extending warm window to %.0fs)",
+                    hold_seconds,
+                )
+                self._reschedule_close(hold_seconds)
+                return
+            try:
+                await self._spin_up_upstream()
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.warning(
+                    "CPD7 relay: prewarm failed to spin up upstream: %s", exc,
+                )
+                await self._teardown_upstream()
+                return
+            self._reschedule_close(hold_seconds)
+            _LOGGER.info(
+                "CPD7 relay: prewarmed upstream (holding for %.0fs)",
+                hold_seconds,
+            )
+
+    # ── Connection handler ─────────────────────────────────────────────────
 
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
     ) -> None:
         peer = writer.get_extra_info("peername")
         _LOGGER.info("CPD7 relay client connected: %s", peer)
-        async with self._lock:
-            try:
-                await self._run_upstream(writer)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                _LOGGER.warning(
-                    "CPD7 relay session error for %s: %s", peer, exc
-                )
-            finally:
+
+        # Attach the writer to the (possibly pre-warmed) upstream.
+        attached_warm = False
+        initial_burst = b""
+        async with self._state_lock:
+            if self._is_pump_alive():
+                attached_warm = True
+                initial_burst = self._snapshot_buffer_for_new_client()
+            else:
                 try:
-                    writer.close()
-                    await writer.wait_closed()
-                except Exception:  # noqa: BLE001
-                    pass
-                _LOGGER.info("CPD7 relay client disconnected: %s", peer)
+                    await self._spin_up_upstream()
+                except Exception as exc:  # noqa: BLE001
+                    _LOGGER.error(
+                        "CPD7 relay: LAN start failed for %s: %s", peer, exc,
+                    )
+                    await self._teardown_upstream()
+                    try:
+                        writer.close()
+                        await writer.wait_closed()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return
+            self._cancel_close()
+            self._writer = writer
+            if attached_warm:
+                _LOGGER.debug(
+                    "CPD7 relay: client %s attached to warm upstream "
+                    "(initial burst %dB)", peer, len(initial_burst),
+                )
 
-    async def _run_upstream(self, writer: asyncio.StreamWriter) -> None:
-        loop = asyncio.get_running_loop()
+        # Send the initial keyframe-aligned burst, then let the pump
+        # task forward live bytes directly to the writer.
+        try:
+            if initial_burst:
+                writer.write(initial_burst)
+                try:
+                    await writer.drain()
+                except (BrokenPipeError, ConnectionResetError):
+                    _LOGGER.info("CPD7 relay: client closed during initial burst")
+                    return
+            await self._wait_for_client_eof(reader)
+        finally:
+            async with self._state_lock:
+                if self._writer is writer:
+                    self._writer = None
+                    self._reschedule_close(_POST_CLIENT_GRACE_SECONDS)
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:  # noqa: BLE001
+                pass
+            _LOGGER.info("CPD7 relay client disconnected: %s", peer)
 
-        # 0. Resolve current LAN host + related sub-serial
+    @staticmethod
+    async def _wait_for_client_eof(reader: asyncio.StreamReader) -> None:
+        """Block until the client closes its end of the socket.
+
+        ffmpeg / HA's stream worker doesn't actually send anything on
+        the upstream connection — it's a one-way pipe — so ``read``
+        returns ``b''`` only when the peer closes.
+        """
+        try:
+            while True:
+                chunk = await reader.read(4096)
+                if not chunk:
+                    return
+        except (ConnectionResetError, BrokenPipeError):
+            return
+        except asyncio.CancelledError:
+            raise
+
+    # ── Upstream session lifecycle ─────────────────────────────────────────
+
+    def _is_pump_alive(self) -> bool:
+        return self._pump_task is not None and not self._pump_task.done()
+
+    async def _spin_up_upstream(self) -> None:
+        """Open a fresh LAN session and start the pump task.
+
+        Caller must hold ``self._state_lock`` and have verified that no
+        upstream is currently running.
+        """
         host = self._host_provider()
         if not host or host == "0.0.0.0":
-            _LOGGER.error("CPD7 relay: doorbell LAN IP unknown")
-            return
+            raise RuntimeError("doorbell LAN IP unknown")
         related = self._related_provider()
         if not related:
-            _LOGGER.error("CPD7 relay: related-device sub-serial unknown")
-            return
+            raise RuntimeError("related-device sub-serial unknown")
 
-        # 1. AES key
-        try:
-            aes_key = await self._get_aes_key()
-        except Exception as exc:  # noqa: BLE001
-            _LOGGER.error("CPD7 relay: AES key fetch failed: %s", exc)
-            return
-
-        # 2. LAN client (sync sockets — run start/recv/close in executor)
+        aes_key = await self._get_aes_key()
         lan = Cpd7LanClient(
-            host=host,
-            related_device=related,
-            aes_key=aes_key,
+            host=host, related_device=related, aes_key=aes_key,
         )
-        try:
-            await loop.run_in_executor(None, lan.start)
-        except Exception as exc:  # noqa: BLE001
-            _LOGGER.error("CPD7 relay: LAN start failed: %s", exc)
-            await loop.run_in_executor(None, lan.close)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lan.start)
+
+        self._lan = lan
+        self._decoder = StreamDecoder(lan.ecdh_priv)
+        self._buffer = bytearray()
+        self._pump_task = asyncio.create_task(
+            self._pump_upstream(), name="cpd7_relay_pump",
+        )
+
+    async def _teardown_upstream(self) -> None:
+        """Cancel the pump task and close the LAN session.
+
+        Caller must hold ``self._state_lock``.  Idempotent.
+        """
+        self._cancel_close()
+        task = self._pump_task
+        self._pump_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        lan = self._lan
+        self._lan = None
+        self._decoder = None
+        self._buffer = bytearray()
+        if lan is not None:
+            try:
+                await asyncio.get_running_loop().run_in_executor(None, lan.close)
+            except Exception:  # noqa: BLE001
+                pass
+
+    async def _pump_upstream(self) -> None:
+        """Read encrypted bytes, decrypt, push to the buffer + active writer."""
+        loop = asyncio.get_running_loop()
+        lan = self._lan
+        decoder = self._decoder
+        if lan is None or decoder is None:
             return
-
-        decoder = StreamDecoder(lan.ecdh_priv)
-
-        # 3. Pump bytes
         try:
             while True:
                 raw = await loop.run_in_executor(None, lan.read_chunk)
                 if not raw:
                     _LOGGER.info("CPD7 relay: upstream EOF")
-                    return
+                    break
                 decoder.feed(raw)
                 plain = decoder.take()
                 if not plain:
                     continue
-                writer.write(plain)
-                try:
-                    await writer.drain()
-                except (BrokenPipeError, ConnectionResetError):
-                    _LOGGER.info("CPD7 relay: client closed during drain")
-                    return
-                except asyncio.CancelledError:
-                    raise
+
+                # Keep the buffer trimmed at keyframe boundaries.
+                self._buffer.extend(plain)
+                if len(self._buffer) > _BUFFER_TRIM_TARGET:
+                    self._trim_buffer_to_last_keyframe()
+
+                # If a writer is attached, forward the new chunk live.
+                writer = self._writer
+                if writer is not None and not writer.is_closing():
+                    try:
+                        writer.write(plain)
+                        await writer.drain()
+                    except (BrokenPipeError, ConnectionResetError):
+                        _LOGGER.info("CPD7 relay: writer closed mid-pump")
+                        if self._writer is writer:
+                            self._writer = None
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning("CPD7 relay: pump task error: %s", exc)
         finally:
-            try:
-                await loop.run_in_executor(None, lan.close)
-            except Exception:  # noqa: BLE001
-                pass
+            # Allow ``_teardown_upstream`` to clean up cleanly.
+            pass
+
+    # ── Buffer helpers ─────────────────────────────────────────────────────
+
+    def _snapshot_buffer_for_new_client(self) -> bytes:
+        """Return the most recent keyframe-aligned slice of the buffer.
+
+        Falls back to the whole buffer if no keyframe pattern is
+        present (which shouldn't happen — the StreamDecoder already
+        gates output on the first VPS).
+        """
+        if not self._buffer:
+            return b""
+        b = bytes(self._buffer)
+        last_vps = max(b.rfind(_HEVC_VPS_4B), b.rfind(_HEVC_VPS_3B))
+        if last_vps < 0:
+            return b
+        pack = b.rfind(_MPEG_PS_PACK, 0, last_vps)
+        start = pack if pack >= 0 else last_vps
+        return b[start:]
+
+    def _trim_buffer_to_last_keyframe(self) -> None:
+        b = bytes(self._buffer)
+        last_vps = max(b.rfind(_HEVC_VPS_4B), b.rfind(_HEVC_VPS_3B))
+        if last_vps < 1024:
+            return
+        pack = b.rfind(_MPEG_PS_PACK, 0, last_vps)
+        start = pack if pack >= 0 else last_vps
+        if start > 0:
+            del self._buffer[:start]
+
+    # ── Close-timer helpers ────────────────────────────────────────────────
+
+    def _cancel_close(self) -> None:
+        handle = self._close_handle
+        self._close_handle = None
+        if handle is not None:
+            handle.cancel()
+
+    def _reschedule_close(self, seconds: float) -> None:
+        self._cancel_close()
+        if seconds <= 0:
+            return
+        loop = asyncio.get_running_loop()
+        self._close_handle = loop.call_later(
+            seconds, lambda: asyncio.create_task(self._maybe_close_upstream()),
+        )
+
+    async def _maybe_close_upstream(self) -> None:
+        async with self._state_lock:
+            self._close_handle = None
+            if self._writer is not None:
+                # A client connected after the timer was scheduled.
+                return
+            if not self._is_pump_alive():
+                return
+            _LOGGER.info("CPD7 relay: warm window expired — closing upstream")
+            await self._teardown_upstream()
+
+
+# Suppress unused-import warning from struct in earlier revisions if present.
+_ = struct

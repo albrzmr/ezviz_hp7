@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from .pylocalapi.client import EzvizClient
@@ -57,6 +58,18 @@ class Hp7Api:
         self.supports_door = True
         self.supports_gate = True
         self.model: str = "HP7"
+        # Cache for the AES-128 control key keyed by bare serial.  The
+        # value is a ``(key_bytes, fetched_at_monotonic)`` tuple; entries
+        # older than ``AES_KEY_TTL`` are refetched.  The cache is also
+        # invalidated on any decrypt error from the LAN client (see
+        # ``invalidate_aes_cache``).
+        self._aes_cache: dict[str, tuple[bytes, float]] = {}
+
+    # AES-128 control key cache TTL.  The key only changes when the
+    # doorbell is re-paired (rare, manual user action), so a long TTL
+    # is safe.  We refresh proactively from a background task in
+    # ``__init__.py`` to keep cold-start latency near zero.
+    AES_KEY_TTL: float = 30 * 60.0
 
     @property
     def token(self) -> dict[str, Any] | None:
@@ -156,17 +169,27 @@ class Hp7Api:
 
     # ── LAN AES key + related-device helpers (used by tcp_relay) ──────
 
-    def fetch_lan_aes_key(self, serial: str) -> bytes:
+    def fetch_lan_aes_key(self, serial: str, force: bool = False) -> bytes:
         """Return the 16-byte AES-128 control key for the given device.
 
-        Refreshes the cloud token first so the EUCAS call carries a valid
-        ClientID.  Retries once with a fresh login on failure to handle
-        JWT expiry transparently.
+        Returns a cached value if one is available and younger than
+        ``AES_KEY_TTL``.  When the cache misses (or ``force=True``):
+        refreshes the cloud token so the EUCAS call carries a valid
+        ClientID, queries EUCAS cmd 0x2001 ``DirectConnect`` and
+        retries once with a fresh login on failure to handle JWT
+        expiry transparently.
 
         Raises:
             RuntimeError: if the key cannot be obtained.
         """
         bare = serial.split("-")[0] if "-" in serial else serial
+
+        if not force:
+            cached = self._aes_cache.get(bare)
+            if cached is not None:
+                key, fetched_at = cached
+                if (time.monotonic() - fetched_at) < self.AES_KEY_TTL:
+                    return key
 
         def _try_once() -> str:
             cas = EzvizCAS(self._token)
@@ -202,7 +225,22 @@ class Hp7Api:
 
         if not key or len(key) != 16:
             raise RuntimeError(f"invalid AES key from EUCAS: {key!r}")
-        return key.encode("ascii")
+        key_bytes = key.encode("ascii")
+        self._aes_cache[bare] = (key_bytes, time.monotonic())
+        return key_bytes
+
+    def invalidate_aes_cache(self, serial: str | None = None) -> None:
+        """Drop cached AES key(s).
+
+        Call this when a stream session fails to decrypt — most likely
+        cause is that the doorbell was re-paired, which rotates the
+        key.  Next ``fetch_lan_aes_key`` call will hit EUCAS again.
+        """
+        if serial is None:
+            self._aes_cache.clear()
+            return
+        bare = serial.split("-")[0] if "-" in serial else serial
+        self._aes_cache.pop(bare, None)
 
     def get_related_device(self, serial: str) -> str:
         """Resolve the camera-module sub-serial used in <Channel RelatedDevice>.

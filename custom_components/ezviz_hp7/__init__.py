@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from typing import Any
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers.event import async_track_time_interval
 
 from .const import (
     DOMAIN,
@@ -19,6 +21,18 @@ from .coordinator import Hp7Coordinator
 from .tcp_relay import CpdMpegPsRelay
 
 _LOGGER = logging.getLogger(__name__)
+
+
+# Refresh the AES-128 control key roughly twice within its TTL.  The
+# ``fetch_lan_aes_key`` helper caches for 30 min, so a 12 min interval
+# keeps the cache permanently warm without piling on cloud calls.
+_AES_REFRESH_INTERVAL = timedelta(minutes=12)
+
+# How long the relay keeps the upstream session warm after a doorbell
+# event before tearing it down (in case the user never opens the
+# dashboard).  Generous enough to cover a slow notification → tap →
+# camera-card path.
+_PREWARM_HOLD_SECONDS = 60.0
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -102,7 +116,81 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
+    # ── Level 1: keep the AES-128 control key cached & always warm.
+    # First fetch immediately (in background — don't block setup), then
+    # refresh on a periodic interval shorter than the cache TTL.
+    async def _refresh_aes(_now: object | None = None) -> None:
+        try:
+            await hass.async_add_executor_job(
+                api.fetch_lan_aes_key, serial, True,  # force=True
+            )
+            _LOGGER.debug("EZVIZ HP7: AES key cache refreshed")
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.debug("EZVIZ HP7: AES key refresh failed: %s", exc)
+
+    hass.async_create_background_task(
+        _refresh_aes(), name="ezviz_hp7_aes_warmup",
+    )
+    entry.async_on_unload(
+        async_track_time_interval(hass, _refresh_aes, _AES_REFRESH_INTERVAL)
+    )
+
+    # ── Level 2: pre-warm the upstream LAN session whenever the
+    # doorbell signals an event (ring, motion, smart-detection alarm).
+    # By the time the user taps the notification and HA shows the
+    # camera card, the session is already running and the first frame
+    # appears with no extra setup latency.
+    if relay is not None:
+        _install_event_prewarm(hass, entry, coordinator, relay)
+
     return True
+
+
+def _install_event_prewarm(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    coordinator: Hp7Coordinator,
+    relay: CpdMpegPsRelay,
+) -> None:
+    """Trigger ``relay.async_prewarm`` on doorbell events.
+
+    Watches the coordinator's per-poll data for transitions in two
+    signals:
+      - ``Motion_Trigger``: a boolean motion flag.
+      - ``last_alarm_time``: the timestamp of the most recent cloud
+        alarm (smart detection, doorbell ring, intelligent detection,
+        gate / lock events…).  Any new value means a fresh event.
+    """
+    state: dict[str, Any] = {
+        "motion": False,
+        "alarm_time": (coordinator.data or {}).get("last_alarm_time"),
+    }
+
+    @callback
+    def _on_update() -> None:
+        data = coordinator.data or {}
+        motion_now = bool(data.get("Motion_Trigger"))
+        alarm_time_now = data.get("last_alarm_time")
+
+        triggered = (
+            (motion_now and not state["motion"])
+            or (alarm_time_now is not None and alarm_time_now != state["alarm_time"])
+        )
+        state["motion"] = motion_now
+        state["alarm_time"] = alarm_time_now
+
+        if not triggered:
+            return
+        _LOGGER.info(
+            "EZVIZ HP7: doorbell event detected — pre-warming live stream "
+            "(motion=%s alarm_time=%s)", motion_now, alarm_time_now,
+        )
+        hass.async_create_background_task(
+            relay.async_prewarm(_PREWARM_HOLD_SECONDS),
+            name="ezviz_hp7_prewarm",
+        )
+
+    entry.async_on_unload(coordinator.async_add_listener(_on_update))
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
