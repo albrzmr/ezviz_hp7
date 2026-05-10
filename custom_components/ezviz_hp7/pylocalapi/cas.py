@@ -9,7 +9,9 @@ Protocol flow:
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
 import logging
 import random
 import socket
@@ -20,15 +22,40 @@ from typing import Any, cast
 import xmltodict
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
-
-# Pixel phone feature code — verified to work for cmd 0x2001 + 0x2845.
-# The MAC-based FEATURE_CODE from upstream pyezvizapi only has partial
-# CAS authorization for HP7 / CP7 firmware (sessions 22-28 RE).
-CAS_FEATURE_CODE = "6beca4db471d965ca165dcaeb655ff66"
-
-from pyezvizapi.exceptions import PyEzvizError  # noqa: E402
+from pyezvizapi.exceptions import PyEzvizError
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _extract_sign_from_jwt(token: dict[str, Any]) -> str:
+    """Return the ``s`` (featureCode) claim from the JWT in ``token``.
+
+    The CAS server validates the ``<Sign>`` field against the
+    featureCode the cloud login was performed with — i.e. against the
+    JWT's ``s`` claim.  We extract it from the token instead of using
+    a hardcoded constant, so each install fingerprints differently
+    and the value is impossible for EZVIZ to blacklist globally.
+
+    Falls back to ``session_id`` if the JWT is unparsable (older token
+    formats); the server will reject it but the failure mode is the
+    same as before.
+    """
+    raw = token.get("session_id") or ""
+    try:
+        # JWT format: header.payload.signature — base64url-encoded
+        parts = raw.split(".")
+        if len(parts) >= 2:
+            payload = parts[1]
+            # Add padding if missing (base64url omits ``=`` padding)
+            payload += "=" * (-len(payload) % 4)
+            data = json.loads(base64.urlsafe_b64decode(payload).decode("utf-8"))
+            sign = data.get("s")
+            if isinstance(sign, str) and sign:
+                return sign
+    except (ValueError, KeyError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        _LOGGER.debug("[CAS] JWT parse failed (%s) — using raw session_id", exc)
+    return str(raw)
+
 
 # ── CAS protocol constants ──────────────────────────────────────────────
 CAS_MAGIC = b"\x9e\xba\xac\xe9"
@@ -227,12 +254,17 @@ class EzvizCAS:
 
         Returns parsed XML Response with Session containing Key and OperationCode.
         """
-        # Build clean XML body (matches verified eucas_client.py)
+        # ``<Sign>`` must equal the featureCode the cloud login was
+        # performed with — extract it from the JWT (claim ``s``) so
+        # each install fingerprints with its own per-install random
+        # featureCode (no global hardcoded constant for EZVIZ to
+        # blacklist).
+        sign = _extract_sign_from_jwt(self._token)
         body = (
             '<?xml version="1.0" encoding="utf-8"?>'
             "<Request>"
             f"<ClientID>{self._token['session_id']}</ClientID>"
-            f"<Sign>{CAS_FEATURE_CODE}</Sign>"
+            f"<Sign>{sign}</Sign>"
             f"<DevSerial>{devserial}</DevSerial>"
             "<ClientType>3</ClientType>"
             "</Request>"

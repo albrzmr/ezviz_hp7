@@ -68,7 +68,10 @@ class Hp7Camera(Camera, CoordinatorEntity):
     """Camera entity for the EZVIZ HP7/CP7 doorbell."""
 
     _attr_has_entity_name = True
-    _attr_translation_key = "camera"
+    # ``"Stream"`` is universally understood and avoids an extra
+    # translation indirection — the device name (``EZVIZ CP7 (...)``)
+    # is prefixed automatically by ``has_entity_name``.
+    _attr_name = "Stream"
 
     def __init__(
         self,
@@ -94,6 +97,41 @@ class Hp7Camera(Camera, CoordinatorEntity):
             self._attr_supported_features = CameraEntityFeature.STREAM
         else:
             self._attr_supported_features = CameraEntityFeature(0)
+
+    # ── State (idle / streaming) ──────────────────────────────────────────
+    #
+    # HA's ``Camera.state`` returns ``streaming`` when ``is_streaming`` is
+    # truthy and ``idle`` otherwise — we report ``streaming`` whenever
+    # the relay either has a viewer attached or is pre-warmed (waiting
+    # for a viewer after a doorbell event).  That gives the user a
+    # meaningful state on the dashboard instead of the perpetual
+    # ``idle`` ("Inactivo") that comes with the default ``Camera``
+    # implementation.
+
+    @property
+    def is_streaming(self) -> bool:
+        """Reflect the actual upstream / viewer state of the relay."""
+        if self._relay is None:
+            return False
+        return self._relay.has_active_viewer or self._relay.is_warm
+
+    @property
+    def available(self) -> bool:
+        """Camera is available whenever the doorbell is online and reachable.
+
+        Defers to ``Camera.available`` (which checks the HLS stream
+        when in HLS mode) but additionally requires the cloud
+        coordinator to have a known LAN IP and a non-offline status —
+        otherwise the dashboard would show ``streaming`` for an
+        unreachable doorbell.
+        """
+        if not super().available:
+            return False
+        data = self.coordinator.data or {}
+        status = (data.get("status") or "").lower()
+        if status and status in {"offline", "unreachable"}:
+            return False
+        return bool(data.get("local_ip"))
 
     @property
     def device_info(self) -> DeviceInfo:

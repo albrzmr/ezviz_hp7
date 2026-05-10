@@ -4,6 +4,11 @@ DOMAIN = "ezviz_hp7"
 CONF_REGION = "region"
 CONF_SERIAL = "serial"
 CONF_CAMERA_PASSWORD = "camera_password"
+# Per-install random featureCode (32-char hex).  Generated once on
+# first ``async_setup_entry`` and persisted in ``entry.data`` so each
+# install carries its own EUCAS fingerprint — there is no global
+# hardcoded value that EZVIZ could blacklist.
+CONF_FEATURE_CODE = "feature_code"
 
 # Platforms to set up
 PLATFORMS = ["button", "sensor", "binary_sensor", "camera", "select"]

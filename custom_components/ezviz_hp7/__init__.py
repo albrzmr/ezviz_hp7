@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from datetime import timedelta
 from typing import Any
 
@@ -13,6 +14,7 @@ from homeassistant.helpers.event import async_track_time_interval
 
 from .api import Hp7Api
 from .const import (
+    CONF_FEATURE_CODE,
     CONF_LIVE_VIEW_MODE,
     DEFAULT_LIVE_VIEW_MODE,
     DOMAIN,
@@ -61,6 +63,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     serial: str = entry.data["serial"]
     token: dict[str, Any] | None = entry.data.get("token")
 
+    # Per-install random featureCode.  Generated here for entries that
+    # predate this field (migration from <0.8.3) and persisted so the
+    # same value is reused on every reload — the cloud login and the
+    # EUCAS ``<Sign>`` field must both carry it for HP7 / CP7 streaming
+    # to work.  The token is invalidated when the value changes (the
+    # cloud rejects mismatched featureCode against an old JWT).
+    feature_code: str | None = entry.data.get(CONF_FEATURE_CODE)
+    if not feature_code:
+        feature_code = secrets.token_hex(16)
+        new_data = {**entry.data, CONF_FEATURE_CODE: feature_code}
+        # Drop the cached token: it was issued under a different
+        # featureCode, so its ``s`` claim won't match our new value.
+        new_data.pop("token", None)
+        hass.config_entries.async_update_entry(entry, data=new_data)
+        token = None
+        _LOGGER.info(
+            "[SETUP] generated per-install featureCode for entry %s "
+            "(token cleared, will re-login)",
+            entry.entry_id,
+        )
+
     stats = ActivityStats()
     _LOGGER.info(
         "[SETUP] starting EZVIZ HP7 entry %s (serial=%s, region=%s)",
@@ -70,7 +93,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     try:
-        api = Hp7Api(username, password, region, token=token, stats=stats)
+        api = Hp7Api(
+            username,
+            password,
+            region,
+            token=token,
+            stats=stats,
+            feature_code=feature_code,
+        )
         await hass.async_add_executor_job(api.login)
         await hass.async_add_executor_job(api.detect_capabilities, serial)
     except Exception as exc:
