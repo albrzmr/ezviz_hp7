@@ -8,8 +8,16 @@ CONF_CAMERA_PASSWORD = "camera_password"
 # Platforms to set up
 PLATFORMS = ["button", "sensor", "binary_sensor", "camera", "select"]
 
-# Poll interval in seconds (2 seconds for fast event detection)
-UPDATE_INTERVAL_SEC = 2
+# Poll interval in seconds.  Each tick triggers ~2 cloud calls
+# (``pagelist`` + ``unifiedmsg/list``), so this directly controls the
+# integration's footprint on the EZVIZ servers.  The previous value of
+# 2 s meant ~3,600 calls per hour per device, which is high enough to
+# attract rate-limiting / abuse-detection on the EZVIZ side.  At 15 s
+# we still pick up doorbell ring / motion events within a second or
+# two on average (cloud lags ~3 s anyway), but generate ~12× fewer
+# requests.  Considered exposing this in the options flow but the
+# default is fine for the typical home doorbell case.
+UPDATE_INTERVAL_SEC = 15
 
 # ── Live view mode (options flow) ────────────────────────────────────
 CONF_LIVE_VIEW_MODE = "live_view_mode"

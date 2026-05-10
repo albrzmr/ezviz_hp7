@@ -26,9 +26,13 @@ ALARM_FIELD = "alarm_name"
 ALARM_TIME_FIELD = "last_alarm_time"
 PULSE_SECONDS = 3
 
-# Simple binary sensors mapped directly to coordinator data keys
+# Simple binary sensors mapped directly to coordinator data keys.
+# Note: ``api.get_status`` re-keys the upstream ``Motion_Trigger`` field
+# to ``motion`` (lower-case).  The previous ``Motion_Trigger`` key here
+# never matched, so the motion sensor was permanently OFF — fixed by
+# pointing at the correct key.
 SIMPLE_MAP: list[tuple[str, str, BinarySensorDeviceClass]] = [
-    ("Motion_Trigger", "motion_trigger", BinarySensorDeviceClass.MOTION),
+    ("motion", "motion_trigger", BinarySensorDeviceClass.MOTION),
 ]
 
 # Alarm sensors that trigger for PULSE_SECONDS when specific alarm names appear
