@@ -1,25 +1,26 @@
 """EZVIZ HP7 integration for Home Assistant."""
+
 from __future__ import annotations
 
 import logging
 from datetime import timedelta
 from typing import Any
 
-from homeassistant.core import HomeAssistant, callback
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.event import async_track_time_interval
 
+from .api import Hp7Api
 from .const import (
-    DOMAIN,
-    PLATFORMS,
     CONF_LIVE_VIEW_MODE,
     DEFAULT_LIVE_VIEW_MODE,
+    DOMAIN,
+    PLATFORMS,
 )
-from .api import Hp7Api
 from .coordinator import Hp7Coordinator
-from .tcp_relay import CpdMpegPsRelay
 from .stats import ActivityStats
+from .tcp_relay import CpdMpegPsRelay
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,14 +44,14 @@ _PREWARM_HOLD_SECONDS = 60.0
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up EZVIZ HP7 from a config entry.
-    
+
     Args:
         hass: Home Assistant instance.
         entry: Config entry with credentials and device info.
-        
+
     Returns:
         True if setup was successful, False otherwise.
-        
+
     Raises:
         ConfigEntryNotReady: If API is not reachable.
     """
@@ -63,7 +64,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     stats = ActivityStats()
     _LOGGER.info(
         "[SETUP] starting EZVIZ HP7 entry %s (serial=%s, region=%s)",
-        entry.entry_id, serial, region,
+        entry.entry_id,
+        serial,
+        region,
     )
 
     try:
@@ -83,11 +86,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Resolve the camera-module sub-serial (used in <Channel RelatedDevice>)
     try:
-        related = await hass.async_add_executor_job(
-            api.get_related_device, serial
+        related = await hass.async_add_executor_job(api.get_related_device, serial)
+    except Exception as exc:
+        _LOGGER.debug(
+            "get_related_device failed: %s — falling back to main serial", exc
         )
-    except Exception as exc:  # noqa: BLE001
-        _LOGGER.debug("get_related_device failed: %s — falling back to main serial", exc)
         related = serial
 
     def _host_provider() -> str:
@@ -109,16 +112,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     try:
         await relay.async_start()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _LOGGER.warning("CPD7 relay failed to start: %s — live stream disabled", exc)
         relay = None
 
-    live_view_mode: str = entry.options.get(
-        CONF_LIVE_VIEW_MODE, DEFAULT_LIVE_VIEW_MODE
-    )
+    live_view_mode: str = entry.options.get(CONF_LIVE_VIEW_MODE, DEFAULT_LIVE_VIEW_MODE)
     _LOGGER.info(
         "[SETUP] entry %s ready (mode=%s, relay=%s)",
-        entry.entry_id, live_view_mode,
+        entry.entry_id,
+        live_view_mode,
         relay.url if relay else "DISABLED",
     )
 
@@ -141,13 +143,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _refresh_aes(_now: object | None = None) -> None:
         try:
             await hass.async_add_executor_job(
-                api.fetch_lan_aes_key, serial, True,  # force=True
+                api.fetch_lan_aes_key,
+                serial,
+                True,  # force=True
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             _LOGGER.warning("[AES-WARMUP] periodic AES refresh failed: %s", exc)
 
     hass.async_create_background_task(
-        _refresh_aes(), name="ezviz_hp7_aes_warmup",
+        _refresh_aes(),
+        name="ezviz_hp7_aes_warmup",
     )
     entry.async_on_unload(
         async_track_time_interval(hass, _refresh_aes, _AES_REFRESH_INTERVAL)
@@ -203,7 +208,8 @@ def _install_event_prewarm(
 
         _LOGGER.info(
             "[EVENT] alarm detected (name=%s, time=%s) — pre-warming",
-            alarm_name_now, alarm_time_now,
+            alarm_name_now,
+            alarm_time_now,
         )
         hass.async_create_background_task(
             relay.async_prewarm(_PREWARM_HOLD_SECONDS, trigger="alarm"),
@@ -215,16 +221,16 @@ def _install_event_prewarm(
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry.
-    
+
     Args:
         hass: Home Assistant instance.
         entry: Config entry to unload.
-        
+
     Returns:
         True if unload was successful.
     """
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    
+
     if unload_ok:
         data = hass.data.get(DOMAIN, {}).pop(entry.entry_id, {})
         relay: CpdMpegPsRelay | None = data.get("relay")

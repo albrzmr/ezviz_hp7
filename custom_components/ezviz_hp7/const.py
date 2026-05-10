@@ -14,7 +14,7 @@ PLATFORMS = ["button", "sensor", "binary_sensor", "camera", "select"]
 # 2 s meant ~3,600 calls per hour per device, which is high enough to
 # attract rate-limiting / abuse-detection on the EZVIZ side.  At 15 s
 # we still pick up doorbell ring / motion events within a second or
-# two on average (cloud lags ~3 s anyway), but generate ~12× fewer
+# two on average (cloud lags ~3 s anyway), but generate ~12x fewer
 # requests.  Considered exposing this in the options flow but the
 # default is fine for the typical home doorbell case.
 UPDATE_INTERVAL_SEC = 15

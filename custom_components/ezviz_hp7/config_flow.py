@@ -1,4 +1,5 @@
 """Config flow for EZVIZ HP7 integration."""
+
 from __future__ import annotations
 
 import logging
@@ -6,18 +7,18 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 
 from .api import Hp7Api
 from .const import (
-    DOMAIN,
+    CONF_LIVE_VIEW_MODE,
     CONF_REGION,
     CONF_SERIAL,
-    CONF_LIVE_VIEW_MODE,
     DEFAULT_LIVE_VIEW_MODE,
-    LIVE_VIEW_MJPEG,
+    DOMAIN,
     LIVE_VIEW_HLS,
+    LIVE_VIEW_MJPEG,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -43,10 +44,10 @@ SERIAL_SCHEMA = vol.Schema(
 
 def _looks_like_long_serial(serial: str) -> bool:
     """Check if serial looks like a long/stable identifier.
-    
+
     Args:
         serial: Serial string to check.
-        
+
     Returns:
         True if serial appears to be a long identifier.
     """
@@ -77,10 +78,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Handle user data entry step.
-        
+
         Args:
             user_input: User provided data.
-            
+
         Returns:
             Form config or next step.
         """
@@ -143,9 +144,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 shown_serial = serial_key
             else:
                 shown_serial = (
-                    info.get("serial_long")
-                    or info.get("full_serial")
-                    or None
+                    info.get("serial_long") or info.get("full_serial") or None
                 )
 
             # Skip empty serials to avoid duplicates
@@ -176,10 +175,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Handle device selection from list.
-        
+
         Args:
             user_input: User selected device.
-            
+
         Returns:
             Form config or config entry.
         """

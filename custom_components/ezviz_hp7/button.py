@@ -1,16 +1,18 @@
 """EZVIZ HP7 button entities."""
+
 from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.button import ButtonEntity
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.config_entries import ConfigEntry
 
 from .const import DOMAIN
+from .helpers import get_device_info
 
 if TYPE_CHECKING:
     from .api import Hp7Api
@@ -24,7 +26,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up EZVIZ HP7 button entities.
-    
+
     Args:
         hass: Home Assistant instance.
         entry: Config entry.
@@ -39,7 +41,7 @@ async def async_setup_entry(
         entities.append(EzvizHp7Button(hass, api, serial, "unlock_gate"))
     if getattr(api, "supports_door", False):
         entities.append(EzvizHp7Button(hass, api, serial, "unlock_door"))
-    
+
     async_add_entities(entities)
 
 
@@ -56,7 +58,7 @@ class EzvizHp7Button(ButtonEntity):
         action: str,
     ) -> None:
         """Initialize button entity.
-        
+
         Args:
             hass: Home Assistant instance.
             api: EZVIZ HP7 API instance.
@@ -72,21 +74,16 @@ class EzvizHp7Button(ButtonEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Return device information."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._serial)},
-            name=f"EZVIZ HP7 ({self._serial})",
-            manufacturer="EZVIZ",
-            model="HP7",
-        )
+        """Return device information (shared across all platforms)."""
+        return get_device_info(self._serial, self._api)
 
     async def async_press(self) -> None:
         """Handle button press.
-        
+
         Sends unlock command to EZVIZ device.
         """
         _LOGGER.debug("EZVIZ HP7 button pressed: %s (%s)", self._action, self._serial)
-        
+
         success = False
         if self._action == "unlock_gate":
             success = await self.hass.async_add_executor_job(
@@ -100,7 +97,7 @@ class EzvizHp7Button(ButtonEntity):
             log_msg = "Unlock Door"
         else:
             return
-        
+
         if success:
             _LOGGER.info("EZVIZ HP7: %s successful", log_msg)
         else:

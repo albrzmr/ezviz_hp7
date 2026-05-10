@@ -1,0 +1,83 @@
+[project]
+name = "ezviz_hp7_integration"
+version = "0.7.2"
+description = "Home Assistant custom integration for EZVIZ HP7 / CP7 doorbells"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [{ name = "albrzmr" }]
+keywords = ["home-assistant", "ezviz", "hp7", "cp7", "doorbell"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: Home Assistant",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+# This project ships as a Home Assistant custom integration, not a
+# pip-installable package — there is no ``[tool.setuptools]`` /
+# ``[build-system]`` section on purpose.  ``pyproject.toml`` exists so
+# ruff and pytest pick up consistent config from a single source.
+
+# ── ruff: linter + formatter ────────────────────────────────────────
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+extend-exclude = [
+    # Vendored 3rd-party (pyezvizapi) — reformatted upstream, do not lint.
+    "custom_components/ezviz_hp7/pylocalapi",
+    # Research-vendored crypto / wire protocol code — formatted to
+    # match the ``docs/cpd7-stream-recipe`` source of truth.
+    "custom_components/ezviz_hp7/cpd7",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "B",     # flake8-bugbear
+    "ASYNC", # asyncio bug patterns
+    "UP",    # pyupgrade
+    "SIM",   # flake8-simplify
+    "RUF",   # ruff-specific
+    "PERF",  # perflint
+]
+ignore = [
+    # Line length is enforced by the formatter, not the linter.
+    "E501",
+    # ``def foo(x = SomeCall())`` is the standard HA pattern for
+    # entity property defaults / dataclass defaults.
+    "B008",
+    # ``except Exception`` is sometimes intentional (broad I/O surface
+    # against pyezvizapi which raises a wide variety of types).  Use
+    # a per-line ``# noqa: BLE001`` where it's wanted.
+    "BLE001",
+    # ``try/except/pass`` reads more naturally than
+    # ``with contextlib.suppress(...)`` in cleanup paths where the
+    # exception type already documents the suppressed condition.
+    "SIM105",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests routinely use bare asserts and may shadow names.
+"tests/**" = ["B011"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ── pytest ──────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers"
+filterwarnings = [
+    # urllib3 / cryptography deprecations on macOS LibreSSL — out of
+    # our control, drowns out useful test output.
+    "ignore::DeprecationWarning:urllib3",
+    "ignore::DeprecationWarning:cryptography",
+]

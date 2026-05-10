@@ -6,6 +6,7 @@ Options flow.  Picking a different option updates the config entry's
 options and triggers a reload, which propagates the change to the
 camera entity.
 """
+
 from __future__ import annotations
 
 import logging
@@ -18,12 +19,13 @@ from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
-    DOMAIN,
     CONF_LIVE_VIEW_MODE,
     DEFAULT_LIVE_VIEW_MODE,
-    LIVE_VIEW_MJPEG,
+    DOMAIN,
     LIVE_VIEW_HLS,
+    LIVE_VIEW_MJPEG,
 )
+from .helpers import get_device_info
 
 if TYPE_CHECKING:
     from .api import Hp7Api
@@ -59,7 +61,7 @@ class Hp7LiveViewModeSelect(SelectEntity):
         self,
         hass: HomeAssistant,
         entry: ConfigEntry,
-        api: "Hp7Api",
+        api: Hp7Api,
         serial: str,
     ) -> None:
         self.hass = hass
@@ -70,13 +72,7 @@ class Hp7LiveViewModeSelect(SelectEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        model = getattr(self._api, "model", "HP7")
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._serial)},
-            name=f"EZVIZ {model} ({self._serial})",
-            manufacturer="EZVIZ",
-            model=model,
-        )
+        return get_device_info(self._serial, self._api)
 
     @property
     def current_option(self) -> str:
@@ -93,5 +89,6 @@ class Hp7LiveViewModeSelect(SelectEntity):
         # change propagates to the camera entity (STREAM feature flip,
         # MJPEG vs HLS path).
         _LOGGER.info(
-            "EZVIZ HP7: live view mode changed to %s — reloading entry", option,
+            "EZVIZ HP7: live view mode changed to %s — reloading entry",
+            option,
         )
