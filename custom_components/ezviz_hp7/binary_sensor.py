@@ -27,13 +27,17 @@ ALARM_TIME_FIELD = "last_alarm_time"
 PULSE_SECONDS = 3
 
 # Simple binary sensors mapped directly to coordinator data keys.
-# Note: ``api.get_status`` re-keys the upstream ``Motion_Trigger`` field
-# to ``motion`` (lower-case).  The previous ``Motion_Trigger`` key here
-# never matched, so the motion sensor was permanently OFF — fixed by
-# pointing at the correct key.
-SIMPLE_MAP: list[tuple[str, str, BinarySensorDeviceClass]] = [
-    ("motion", "motion_trigger", BinarySensorDeviceClass.MOTION),
-]
+#
+# Note (HP7 firmware): the ``Motion_Trigger`` field that the upstream
+# integration mapped a sensor to does not appear in the cam_status
+# payload returned by EZVIZ for HP7 / CP7 devices — verified across
+# 240+ polls in beta-testing.  Keeping a binary sensor whose value is
+# permanently OFF is misleading, so the simple-map list is empty for
+# now.  Motion / presence detection on this device is exposed via the
+# pulse-style alarm sensors below (``smart_detection_alarm``,
+# ``intelligent_detection_alarm``, ``doorbell_ringing``…), which the
+# cloud does populate reliably.
+SIMPLE_MAP: list[tuple[str, str, BinarySensorDeviceClass]] = []
 
 # Alarm sensors that trigger for PULSE_SECONDS when specific alarm names appear
 ALARM_MAP: list[tuple[list[str], str, str, BinarySensorDeviceClass | None, str]] = [

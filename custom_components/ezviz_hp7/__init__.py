@@ -173,25 +173,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-def _to_bool_loose(value: Any) -> bool:
-    """Permissive truthy parsing — same shape as ``binary_sensor._to_bool``.
-
-    ``api.get_status`` may return any of {``True``, ``1``, ``"1"``,
-    ``"true"``, ``"on"``, ``"yes"``, ``False``, ``0``, ``"0"``, ``None``}
-    for the motion field depending on firmware version, so we coerce
-    leniently before comparing transitions.
-    """
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, str):
-        return value.strip().lower() in ("1", "true", "on", "yes", "y")
-    return False
-
-
 def _install_event_prewarm(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -200,50 +181,32 @@ def _install_event_prewarm(
 ) -> None:
     """Trigger ``relay.async_prewarm`` on doorbell events.
 
-    Watches the coordinator's per-poll data for transitions in two
-    signals:
-      - ``Motion_Trigger``: a boolean motion flag.
-      - ``last_alarm_time``: the timestamp of the most recent cloud
-        alarm (smart detection, doorbell ring, intelligent detection,
-        gate / lock events…).  Any new value means a fresh event.
+    The HP7 firmware does not populate ``Motion_Trigger`` in
+    ``cam_status`` (verified empirically over hundreds of polls), so
+    the only reliable per-event signal is the cloud alarm timeline —
+    ``last_alarm_time`` changes whenever a smart-detection,
+    intelligent-detection, doorbell-ring or gate/lock event reaches
+    the cloud.  Any new value triggers a pre-warm.
     """
     state: dict[str, Any] = {
-        "motion": False,
         "alarm_time": (coordinator.data or {}).get("last_alarm_time"),
     }
 
     @callback
     def _on_update() -> None:
         data = coordinator.data or {}
-        # ``api.get_status`` re-keys ``Motion_Trigger`` → ``motion``.
-        motion_now = _to_bool_loose(data.get("motion"))
         alarm_time_now = data.get("last_alarm_time")
         alarm_name_now = data.get("alarm_name")
-
-        motion_triggered = motion_now and not state["motion"]
-        alarm_triggered = (
-            alarm_time_now is not None and alarm_time_now != state["alarm_time"]
-        )
-        state["motion"] = motion_now
+        if alarm_time_now is None or alarm_time_now == state["alarm_time"]:
+            return
         state["alarm_time"] = alarm_time_now
 
-        if not (motion_triggered or alarm_triggered):
-            return
-
-        if alarm_triggered:
-            trigger = "alarm"
-            _LOGGER.info(
-                "[EVENT] alarm detected (name=%s, time=%s) — pre-warming",
-                alarm_name_now, alarm_time_now,
-            )
-        else:
-            trigger = "motion"
-            _LOGGER.info(
-                "[EVENT] motion detected (Motion_Trigger=%s) — pre-warming",
-                motion_now,
-            )
+        _LOGGER.info(
+            "[EVENT] alarm detected (name=%s, time=%s) — pre-warming",
+            alarm_name_now, alarm_time_now,
+        )
         hass.async_create_background_task(
-            relay.async_prewarm(_PREWARM_HOLD_SECONDS, trigger=trigger),
+            relay.async_prewarm(_PREWARM_HOLD_SECONDS, trigger="alarm"),
             name="ezviz_hp7_prewarm",
         )
 

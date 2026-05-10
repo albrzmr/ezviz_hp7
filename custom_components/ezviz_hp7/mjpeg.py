@@ -123,27 +123,34 @@ async def serve_mjpeg(
 
     stderr_task = asyncio.create_task(_drain_stderr(proc))
     total_bytes = 0
-    error: BaseException | None = None
+    end_reason = "ok"
+    real_error: BaseException | None = None
     try:
         assert proc.stdout is not None
         while True:
             chunk = await proc.stdout.read(64 * 1024)
             if not chunk:
+                end_reason = "ffmpeg_eof"
                 break
             total_bytes += len(chunk)
             try:
                 await response.write(chunk)
-            except (ConnectionResetError, ConnectionAbortedError, asyncio.CancelledError) as exc:
-                _LOGGER.info("[MJPEG] client %s disconnected mid-stream", peer)
-                error = exc
+            except (ConnectionResetError, ConnectionAbortedError):
+                # Normal: the browser/Companion closed the card.
+                end_reason = "client_disconnected"
                 break
-    except BaseException as exc:  # noqa: BLE001
+    except asyncio.CancelledError:
+        # Normal: HA cancelled the request handler (entry reload, server
+        # shutdown, client closed). Re-raise after cleanup.
+        end_reason = "cancelled"
+        raise
+    except Exception as exc:  # noqa: BLE001
         if stats is not None:
             stats.errors_mjpeg += 1
-        error = exc
-        _LOGGER.warning("[MJPEG] session error: %s", exc)
-        if not isinstance(exc, asyncio.CancelledError):
-            raise
+        real_error = exc
+        end_reason = f"error:{type(exc).__name__}"
+        _LOGGER.warning("[MJPEG] unexpected session error: %s: %s", type(exc).__name__, exc)
+        raise
     finally:
         await _terminate(proc)
         stderr_task.cancel()
@@ -157,13 +164,12 @@ async def serve_mjpeg(
             pass
         duration = time.monotonic() - started_at
         _LOGGER.info(
-            "[MJPEG] session END client=%s duration=%.1fs bytes=%d KB/s=%.1f%s",
+            "[MJPEG] session END client=%s duration=%.1fs bytes=%d KB/s=%.1f reason=%s",
             peer, duration, total_bytes,
             (total_bytes / 1024 / duration) if duration > 0 else 0,
-            f" error={type(error).__name__}" if error is not None
-            and not isinstance(error, (ConnectionResetError, ConnectionAbortedError)) else "",
+            end_reason,
         )
-
+    _ = real_error  # keep variable referenced; aids future debugging hooks
     return response
 
 
