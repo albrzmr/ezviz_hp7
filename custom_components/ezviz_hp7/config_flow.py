@@ -73,8 +73,16 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,
     ) -> config_entries.OptionsFlow:
-        """Return the options flow for this integration."""
-        return OptionsFlowHandler(config_entry)
+        """Return the options flow for this integration.
+
+        On HA 2024.12+ the options flow auto-receives ``self.config_entry``
+        via the HA-managed property — see the docstring on
+        ``OptionsFlowHandler`` — so we must NOT pass ``config_entry``
+        to the constructor.  Passing it triggers
+        ``TypeError: OptionsFlowHandler() takes no arguments`` because
+        the class deliberately doesn't override ``__init__``.
+        """
+        return OptionsFlowHandler()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
