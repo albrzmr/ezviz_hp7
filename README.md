@@ -1,5 +1,20 @@
 # Home Assistant Integration for EZVIZ HP7 / CP7 Intercom
 
+## Before you enjoy the integration — say hi to the people behind it
+
+Two folks made this possible: **[silviosmart](https://ko-fi.com/silviosmart)**,
+who built the original integration this fork stands on, and
+**[albrzmr](https://ko-fi.com/albrzmr)**, who maintains this fork and the
+pure-Python live-stream additions.  If it ends up being useful in your home,
+buying one (or both!) a coffee makes our day.
+
+[![Support albrzmr on Ko-fi](https://img.shields.io/badge/Ko--fi-Buy_albrzmr_a_coffee-FF5E5B?logo=ko-fi&logoColor=white&style=for-the-badge)](https://ko-fi.com/albrzmr)
+[![Support silviosmart on Ko-fi](https://img.shields.io/badge/Ko--fi-Buy_silviosmart_a_coffee_(original_creator)-29ABE0?logo=ko-fi&logoColor=white&style=for-the-badge)](https://ko-fi.com/silviosmart)
+
+Now scroll on and enjoy it.
+
+---
+
 This is a **custom Home Assistant integration** for the **EZVIZ HP7 / CP7 video
 doorbell**.  It exposes the device in HA so you can **watch the live stream**,
 **unlock the door and gate**, see device status, and listen for ring / motion
@@ -186,23 +201,10 @@ firmware versions all useful.
 
 ## Credits
 
-- Original integration: [@Bobsilvio](https://github.com/Bobsilvio/ezviz_hp7).
+- Original integration: [@Bobsilvio](https://github.com/Bobsilvio/ezviz_hp7) — buy him a coffee at [ko-fi.com/silviosmart](https://ko-fi.com/silviosmart).
 - Cloud API helpers: [pyEzvizApi](https://github.com/RenierM26/pyEzvizApi)
   by RenierM26.
-- This fork is maintained by [@albrzmr](https://github.com/albrzmr).
-
----
-
-## Support
-
-If this fork is useful to you, you can buy me a coffee:
-
-[![Support albrzmr on Ko-fi](https://img.shields.io/badge/Ko--fi-Buy_albrzmr_a_coffee-FF5E5B?logo=ko-fi&logoColor=white&style=for-the-badge)](https://ko-fi.com/albrzmr)
-
-This fork stands on the work of the original creator — please consider
-supporting them too if you appreciate the foundation they built:
-
-[![Support silviosmart on Ko-fi](https://img.shields.io/badge/Ko--fi-Buy_silviosmart_a_coffee_(original_creator)-29ABE0?logo=ko-fi&logoColor=white)](https://ko-fi.com/silviosmart)
+- This fork is maintained by [@albrzmr](https://github.com/albrzmr) — buy me a coffee at [ko-fi.com/albrzmr](https://ko-fi.com/albrzmr).
 
 ---
 
