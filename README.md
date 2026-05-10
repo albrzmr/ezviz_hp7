@@ -3,7 +3,7 @@
 [![CI](https://github.com/albrzmr/ezviz_hp7/actions/workflows/ci.yml/badge.svg)](https://github.com/albrzmr/ezviz_hp7/actions/workflows/ci.yml)
 [![HACS Validation](https://github.com/albrzmr/ezviz_hp7/actions/workflows/ci.yml/badge.svg?event=schedule)](https://github.com/albrzmr/ezviz_hp7/actions)
 [![codecov](https://codecov.io/gh/albrzmr/ezviz_hp7/branch/main/graph/badge.svg)](https://codecov.io/gh/albrzmr/ezviz_hp7)
-[![HACS](https://img.shields.io/badge/HACS-Default-orange.svg)](https://github.com/hacs/integration)
+[![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz/docs/faq/custom_repositories)
 [![Code style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit)](https://github.com/pre-commit/pre-commit)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -25,13 +25,13 @@ Now scroll on and enjoy it.
 
 This is a **custom Home Assistant integration** for the **EZVIZ HP7 / CP7 video
 doorbell**.  It exposes the device in HA so you can **watch the live stream**,
-**unlock the door and gate**, see device status, and listen for ring / motion
-events — all on your local LAN, without depending on the EZVIZ NetSDK.
+**unlock the door and gate**, see device status, and listen for ring events —
+all on your local LAN, without any add-on containers or extra services.
 
 This fork extends the original integration with a **pure-Python live-stream
-pipeline** that reverse-engineers and replaces EZVIZ's proprietary LAN protocol
-on ports 9010/9020.  No native SDK, no add-on container, no Frida, no emulator
-— just `cryptography` + `pycryptodome` + ffmpeg (which HA already ships).
+pipeline** that connects to the doorbell directly on the LAN.  No native SDK,
+no add-on container, no emulator — just `cryptography` + `pycryptodome` +
+ffmpeg (which Home Assistant already ships).
 
 ---
 
@@ -51,7 +51,7 @@ on ports 9010/9020.  No native SDK, no add-on container, no Frida, no emulator
     HEVC-capable client (Safari / iOS / hardware-decoded Android).
 - **Door unlock** (lock #2 by default).
 - **Gate unlock** (lock #1 by default).
-- Device sensors: firmware, online status, last alarm picture, ring/motion events.
+- Device sensors: firmware, online status, last alarm picture and type, doorbell-ring / smart-detection / gate-open events.
 - Service calls usable from automations and scripts.
 - Multi-region support (EU / US / CN / AS / SA / RU).
 
@@ -69,36 +69,31 @@ full 2K detail and have an HEVC-capable client.
 
 ### Live-stream notes
 
-- Each viewer triggers a fresh upstream session on the doorbell.  After
-  cloud token refresh + EUCAS round-trip + ECDH handshake the first
-  frame appears in roughly 1–2 s.
-- The AES-128 control key rotates whenever the doorbell is re-paired;
-  it is refetched per session via the EUCAS `0x2001 DirectConnect`
-  command.
+- Each viewer triggers a fresh live session on the doorbell.  The
+  first frame typically appears within 1–2 s.
+- Re-pairing the doorbell rotates its per-device session key; the
+  integration refetches it transparently the next time a viewer
+  connects.
 - For the standard **Camera** Lovelace card, leave the integration in
-  **HLS** mode (the card uses HA's stream worker).  For low-latency
-  MJPEG, use a **Picture Entity** card with `camera_view: live`.
+  **HLS** mode (the card uses Home Assistant's stream worker).  For
+  low-latency MJPEG, use a **Picture Entity** card with
+  `camera_view: live`.
 
 ---
 
-## Architecture (brief)
+## How it works (brief)
 
 ```
-HA Stream component → ffmpeg (PyAV) -i tcp://127.0.0.1:RANDOM
-                              ↑
-                      asyncio TCP relay (tcp_relay.py)
-                              ↑
-                      StreamDecoder  — gates output on HEVC VPS keyframe
-                              ↑   ECDH P-256 → AES-256-ECB → ChaCha20
-                      Cpd7LanClient — INIT 0x2013 / INVITE 0x2011 / PLAY 0x3105
-                              ↑   AES-128-CBC framing on ports 9010 + 9020
-                      AES-128 key from EUCAS cmd 0x2001 DirectConnect
-                              ↑
-                      pyezviz cloud login (existing token flow)
+HA Stream component → ffmpeg → asyncio TCP relay → LAN session to the doorbell
+                                                          ↑
+                                                    EZVIZ cloud login
 ```
 
-Reverse-engineering notes and the full wire-format spec live in `docs/` of
-the upstream research repo (Ghidra/jadx traces, Frida hooks, packet layouts).
+The integration logs in through the EZVIZ cloud API to discover the
+doorbell, opens a local TCP relay, then exposes the live stream to
+Home Assistant either as **HLS** (HA's built-in Stream component
+handles muxing) or **MJPEG** (a small ffmpeg subprocess transcodes
+to motion JPEG for low latency).
 
 ---
 
@@ -126,8 +121,8 @@ the upstream research repo (Ghidra/jadx traces, Frida hooks, packet layouts).
 4. Pick the device serial.  HP7 / CP7 serials look like
    `MAINSERIAL-CAMSERIAL` (e.g. `BE0000000-BE0000000`).
 
-The integration logs in through the EZVIZ cloud API, fetches the AES key from
-EUCAS, and starts the local TCP relay used for streaming.
+The integration logs in through the EZVIZ cloud API and starts the local TCP
+relay used for streaming.
 
 ---
 
@@ -137,8 +132,8 @@ After setup you'll see:
 
 - A `camera.ezviz_cp7_<serial>` entity exposing the live stream and last
   alarm snapshot.
-- Sensors and binary sensors for firmware, online state, motion, ringing,
-  door / gate status, etc.
+- Sensors and binary sensors for firmware, online state, doorbell ring,
+  smart-detection events, gate / lock status.
 - Two services:
   - `ezviz_hp7.unlock_door`
   - `ezviz_hp7.unlock_gate`
@@ -189,14 +184,14 @@ logger:
 
 Useful log markers:
 
-- `tcp_relay] CPD7 relay listening on 127.0.0.1:NNNN` — relay started.
-- `tcp_relay] CPD7 relay client connected` — HA Stream worker connected.
-- `cpd7.lan_client] CPD7 PLAY ... rx_cmd=0x3106` — PLAY accepted by doorbell.
-- `cpd7.decoder] ChaCha20 key derived` — ECDH handshake OK.
-- `cpd7.decoder] keyframe found at +N (pack@M) — stream synced` — first
-  HEVC keyframe seen, bytes are flowing to ffmpeg.
-- `[libav.hevc] PPS id out of range` (repeated) — keyframe gating failed
-  (open an issue with logs).
+- `... relay listening on 127.0.0.1:NNNN` — local relay started.
+- `... relay client connected` — HA Stream worker connected.
+- `... PLAY accepted` — play request accepted by the doorbell.
+- `... session key derived` — LAN handshake completed.
+- `... keyframe found ... stream synced` — first video keyframe seen,
+  bytes are flowing to ffmpeg.
+- `[libav.hevc] PPS id out of range` (repeated) — keyframe sync
+  failed (open an issue with the surrounding log).
 
 ---
 
@@ -224,11 +219,11 @@ see [ROADMAP.md](ROADMAP.md) for the technical scope and current state.
 This integration is provided **as-is**, with no warranty of any kind, and is
 intended for **personal use** with EZVIZ doorbells you own.
 
-EZVIZ's Terms of Service may prohibit reverse engineering and the use of
-non-official clients to access their devices and cloud services.  Installing
-or running this integration is entirely at your own risk — including the
-risk of EZVIZ suspending or terminating your account.  This project is not
-affiliated with, endorsed by, or sponsored by EZVIZ or Hikvision.
+EZVIZ's Terms of Service may restrict the use of non-official clients to
+access their devices and cloud services.  Installing or running this
+integration is entirely at your own risk — including the risk of EZVIZ
+suspending or terminating your account.  This project is not affiliated
+with, endorsed by, or sponsored by EZVIZ or Hikvision.
 
 ---
 
