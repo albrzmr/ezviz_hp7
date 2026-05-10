@@ -26,6 +26,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
+    "pytest-mock",
     "pytest-homeassistant-custom-component",
     "ruff==0.15.12",
     "mypy",

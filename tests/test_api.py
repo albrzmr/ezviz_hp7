@@ -1,0 +1,525 @@
+"""Tests for ``custom_components.ezviz_hp7.api.Hp7Api``.
+
+Phase 1.1 of the testing plan — pure-Python coverage of every code
+path in ``api.py``.  Mocks the boundary (``EzvizClient`` /
+``EzvizCamera`` / ``EzvizCAS``) and lets the rest of ``Hp7Api`` run
+unmodified.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+
+import pytest
+from pyezvizapi.exceptions import PyEzvizError
+
+from custom_components.ezviz_hp7 import api as api_mod
+from custom_components.ezviz_hp7.api import (
+    DEFAULT_DOOR_LOCK_NO,
+    DEFAULT_GATE_LOCK_NO,
+    REGION_URLS,
+    Hp7Api,
+)
+from custom_components.ezviz_hp7.stats import ActivityStats
+
+VALID_AES_KEY = "0123456789ABCDEF"  # 16-char ascii
+ROTATED_AES_KEY = "FEDCBA9876543210"
+
+
+# ── __init__ ────────────────────────────────────────────────────────
+
+
+def test_init_stores_region_url() -> None:
+    api = Hp7Api(username="u", password="p", region="eu")
+    assert api._url == REGION_URLS["eu"]
+    assert api._username == "u"
+    assert api._password == "p"
+    assert api._token is None
+    assert api._client is None
+
+
+def test_init_unknown_region_falls_back_to_eu() -> None:
+    api = Hp7Api(username="u", region="atlantis")
+    assert api._url == REGION_URLS["eu"]
+
+
+def test_init_defaults() -> None:
+    api = Hp7Api(username="u")
+    assert api.model == "HP7"
+    assert api.supports_door is True
+    assert api.supports_gate is True
+    assert api._aes_cache == {}
+    assert api._stats is None
+    assert api._feature_code is None
+
+
+def test_aes_key_ttl_is_30_minutes() -> None:
+    assert Hp7Api.AES_KEY_TTL == 30 * 60.0
+
+
+def test_region_table_has_all_documented_regions() -> None:
+    assert set(REGION_URLS) >= {"eu", "us", "cn", "as", "sa", "ru"}
+
+
+# ── _apply_feature_code ─────────────────────────────────────────────
+
+
+def test_apply_feature_code_noop_when_none(monkeypatch) -> None:
+    """``feature_code=None`` must NOT touch the global FEATURE_CODE."""
+    sentinel = "ORIGINAL-DO-NOT-TOUCH"
+    monkeypatch.setattr(api_mod._ezviz_client_mod, "FEATURE_CODE", sentinel)
+    api = Hp7Api(username="u", feature_code=None)
+    api._apply_feature_code()
+    assert sentinel == api_mod._ezviz_client_mod.FEATURE_CODE
+
+
+def test_apply_feature_code_patches_module_and_header(monkeypatch) -> None:
+    monkeypatch.setattr(api_mod._ezviz_client_mod, "FEATURE_CODE", "OLD")
+    monkeypatch.setitem(api_mod._ezviz_client_mod.REQUEST_HEADER, "featureCode", "OLD")
+    api = Hp7Api(username="u", feature_code="NEW")
+    api._apply_feature_code()
+    assert api_mod._ezviz_client_mod.FEATURE_CODE == "NEW"
+    assert api_mod._ezviz_client_mod.REQUEST_HEADER["featureCode"] == "NEW"
+
+
+def test_apply_feature_code_swallows_header_failure(monkeypatch) -> None:
+    """A weird REQUEST_HEADER must not crash setup — debug-log only."""
+    monkeypatch.setattr(api_mod._ezviz_client_mod, "FEATURE_CODE", "OLD")
+
+    # Replace REQUEST_HEADER with an object whose __setitem__ raises.
+    class _Broken:
+        def __setitem__(self, _key, _value):
+            raise TypeError("not subscriptable")
+
+    monkeypatch.setattr(api_mod._ezviz_client_mod, "REQUEST_HEADER", _Broken())
+    api = Hp7Api(username="u", feature_code="NEW")
+    # Should NOT raise.
+    api._apply_feature_code()
+    assert api_mod._ezviz_client_mod.FEATURE_CODE == "NEW"
+
+
+# ── ensure_client ───────────────────────────────────────────────────
+
+
+def test_ensure_client_idempotent(patched_api) -> None:
+    """Second call must not re-construct ``EzvizClient``."""
+    api_mod.EzvizClient.reset_mock()
+    patched_api.ensure_client()
+    api_mod.EzvizClient.assert_not_called()
+
+
+def test_ensure_client_logs_in_when_no_token(mocker) -> None:
+    """No token → login() called → token stored on the instance."""
+    fake_token = {"session_id": "tok", "username": "u"}
+    fake_client_cls = mocker.patch("custom_components.ezviz_hp7.api.EzvizClient")
+    fake_client_cls.return_value.login.return_value = fake_token
+    api = Hp7Api(username="u", password="p", region="eu", token=None)
+    api.ensure_client()
+    assert api._token == fake_token
+    fake_client_cls.return_value.login.assert_called_once()
+
+
+def test_ensure_client_wraps_pyezviz_error(mocker) -> None:
+    mocker.patch(
+        "custom_components.ezviz_hp7.api.EzvizClient",
+        side_effect=PyEzvizError("boom"),
+    )
+    api = Hp7Api(username="u", password="p", token=None)
+    with pytest.raises(RuntimeError, match="Failed to initialize EZVIZ client"):
+        api.ensure_client()
+
+
+# ── _login_and_store_token ──────────────────────────────────────────
+
+
+def test_login_and_store_requires_client() -> None:
+    api = Hp7Api(username="u")
+    with pytest.raises(RuntimeError, match="Client not initialized"):
+        api._login_and_store_token()
+
+
+def test_login_and_store_bumps_cloud_logins(patched_api) -> None:
+    stats = ActivityStats()
+    patched_api._stats = stats
+    patched_api._login_and_store_token()
+    assert stats.cloud_logins == 1
+
+
+def test_login_and_store_raises_value_error_on_auth_failure(patched_api) -> None:
+    patched_api._client.login.side_effect = ValueError("bad creds")
+    with pytest.raises(ValueError, match="Authentication failed"):
+        patched_api._login_and_store_token()
+
+
+# ── login() smoke ──────────────────────────────────────────────────
+
+
+def test_login_returns_true(patched_api) -> None:
+    assert patched_api.login() is True
+
+
+# ── detect_capabilities ────────────────────────────────────────────
+
+
+def test_detect_capabilities_flips_to_cp7_when_top_level(patched_api) -> None:
+    patched_api._client.get_device_infos.return_value = {"deviceSubCategory": "CP7"}
+    patched_api.detect_capabilities("BE0000000")
+    assert patched_api.model == "CP7"
+    # Always splits hyphenated input to call the cloud with the bare serial.
+    patched_api._client.get_device_infos.assert_called_with("BE0000000")
+
+
+def test_detect_capabilities_uses_main_serial_when_hyphenated(patched_api) -> None:
+    patched_api._client.get_device_infos.return_value = {"deviceSubCategory": "HP7"}
+    patched_api.detect_capabilities("MAIN1234-SUB5678")
+    patched_api._client.get_device_infos.assert_called_with("MAIN1234")
+    assert patched_api.model == "HP7"
+
+
+def test_detect_capabilities_picks_up_cp7_from_resource_infos(patched_api) -> None:
+    patched_api._client.get_device_infos.return_value = {
+        "deviceSubCategory": "OTHER",
+        "resourceInfos": [
+            {"deviceSubCategory": "FOO"},
+            {"deviceSubCategory": "cp7"},  # lowercase — must still match
+        ],
+    }
+    patched_api.detect_capabilities("X")
+    assert patched_api.model == "CP7"
+
+
+def test_detect_capabilities_stays_hp7_when_nothing_matches(patched_api) -> None:
+    patched_api._client.get_device_infos.return_value = {"deviceSubCategory": "BLAH"}
+    patched_api.detect_capabilities("X")
+    assert patched_api.model == "HP7"
+
+
+def test_detect_capabilities_swallows_exceptions(patched_api) -> None:
+    patched_api._client.get_device_infos.side_effect = KeyError("nope")
+    # No raise — and supports flags stay True after the recovery path.
+    patched_api.detect_capabilities("X")
+    assert patched_api.supports_door is True
+    assert patched_api.supports_gate is True
+
+
+# ── fetch_lan_aes_key ───────────────────────────────────────────────
+
+
+def _set_aes_response(key: str) -> None:
+    api_mod.EzvizCAS.return_value.cas_get_encryption.return_value = {
+        "Response": {"Session": {"@Key": key}}
+    }
+
+
+def test_fetch_lan_aes_cache_hit(patched_api) -> None:
+    stats = ActivityStats()
+    patched_api._stats = stats
+    patched_api._aes_cache["TEST00001"] = (b"X" * 16, time.monotonic())
+    out = patched_api.fetch_lan_aes_key("TEST00001-TEST00001")
+    assert out == b"X" * 16
+    assert stats.aes_cache_hits == 1
+    api_mod.EzvizCAS.assert_not_called()
+
+
+def test_fetch_lan_aes_cache_expired(patched_api) -> None:
+    """Cached value older than TTL → re-fetch."""
+    stats = ActivityStats()
+    patched_api._stats = stats
+    expired = time.monotonic() - (Hp7Api.AES_KEY_TTL + 1)
+    patched_api._aes_cache["BARE"] = (b"OLD-KEY-IGNORED!", expired)
+    _set_aes_response(VALID_AES_KEY)
+    out = patched_api.fetch_lan_aes_key("BARE")
+    assert out == VALID_AES_KEY.encode("ascii")
+    assert stats.aes_cache_misses == 1
+    assert stats.aes_cache_hits == 0
+
+
+def test_fetch_lan_aes_cache_miss_calls_eucas(patched_api) -> None:
+    stats = ActivityStats()
+    patched_api._stats = stats
+    _set_aes_response(VALID_AES_KEY)
+    out = patched_api.fetch_lan_aes_key("TEST00001")
+    assert out == VALID_AES_KEY.encode("ascii")
+    assert stats.aes_cache_misses == 1
+    api_mod.EzvizCAS.return_value.cas_get_encryption.assert_called_with("TEST00001")
+    # Cache populated with the fetched key.
+    assert patched_api._aes_cache["TEST00001"][0] == VALID_AES_KEY.encode("ascii")
+
+
+def test_fetch_lan_aes_force_bypasses_cache(patched_api) -> None:
+    stats = ActivityStats()
+    patched_api._stats = stats
+    patched_api._aes_cache["TEST00001"] = (b"CACHED-IGNORED!!", time.monotonic())
+    _set_aes_response(VALID_AES_KEY)
+    out = patched_api.fetch_lan_aes_key("TEST00001-suf", force=True)
+    assert out == VALID_AES_KEY.encode("ascii")
+    assert stats.aes_force_refreshes == 1
+    assert stats.aes_cache_hits == 0
+
+
+def test_fetch_lan_aes_retry_after_eucas_failure(patched_api) -> None:
+    """First EUCAS call raises → re-login → second call succeeds."""
+    stats = ActivityStats()
+    patched_api._stats = stats
+    api_mod.EzvizCAS.return_value.cas_get_encryption.side_effect = [
+        RuntimeError("transient"),
+        {"Response": {"Session": {"@Key": VALID_AES_KEY}}},
+    ]
+    out = patched_api.fetch_lan_aes_key("BARE")
+    assert out == VALID_AES_KEY.encode("ascii")
+    assert stats.errors_cas == 1
+    # ``_login_and_store_token`` should have been invoked once on retry,
+    # which itself bumps ``cloud_logins``.
+    assert stats.cloud_relogins == 1
+    assert stats.cloud_logins == 1
+
+
+def test_fetch_lan_aes_retry_relogin_failure(patched_api) -> None:
+    """EUCAS fails AND re-login fails → bubble up as RuntimeError."""
+    stats = ActivityStats()
+    patched_api._stats = stats
+    api_mod.EzvizCAS.return_value.cas_get_encryption.side_effect = RuntimeError("e1")
+    patched_api._client.login.side_effect = ValueError("relogin-fail")
+    with pytest.raises(RuntimeError, match="AES fetch failed and re-login failed"):
+        patched_api.fetch_lan_aes_key("BARE")
+    # One CAS error from the first call, plus one from the re-login fail.
+    assert stats.errors_cas == 2
+
+
+def test_fetch_lan_aes_key_rotation_logs_warning(patched_api, caplog) -> None:
+    prior = b"AAAAAAAAAAAAAAAA"
+    patched_api._aes_cache["BARE"] = (prior, time.monotonic() - 10000)
+    _set_aes_response(ROTATED_AES_KEY)
+    with caplog.at_level(logging.WARNING, logger="custom_components.ezviz_hp7.api"):
+        patched_api.fetch_lan_aes_key("BARE")
+    assert any("KEY ROTATED" in m for m in caplog.messages)
+
+
+def test_fetch_lan_aes_invalid_length_raises(patched_api) -> None:
+    _set_aes_response("too-short")
+    with pytest.raises(RuntimeError, match="invalid AES key"):
+        patched_api.fetch_lan_aes_key("BARE")
+
+
+def test_fetch_lan_aes_requires_token(patched_api) -> None:
+    """No token after the pre-call refresh → bail out."""
+    patched_api._token = None
+    patched_api._client.login.return_value = None  # refresh stays None
+    with pytest.raises(RuntimeError, match="no cloud token"):
+        patched_api.fetch_lan_aes_key("BARE")
+
+
+def test_fetch_lan_aes_refresh_token_swallows_errors(patched_api) -> None:
+    """Pre-call ``client.login`` may fail — swallow + carry on."""
+    stats = ActivityStats()
+    patched_api._stats = stats
+    patched_api._client.login.side_effect = PyEzvizError("transient refresh fail")
+    _set_aes_response(VALID_AES_KEY)
+    out = patched_api.fetch_lan_aes_key("BARE")
+    assert out == VALID_AES_KEY.encode("ascii")
+
+
+# ── invalidate_aes_cache ───────────────────────────────────────────
+
+
+def test_invalidate_aes_cache_all() -> None:
+    api = Hp7Api(username="u", stats=ActivityStats())
+    api._aes_cache = {"A": (b"x", 0.0), "B": (b"y", 0.0)}
+    api.invalidate_aes_cache(None)
+    assert api._aes_cache == {}
+    assert api._stats.aes_invalidations == 1
+
+
+def test_invalidate_aes_cache_single() -> None:
+    api = Hp7Api(username="u")
+    api._aes_cache = {"A": (b"x", 0.0), "B": (b"y", 0.0)}
+    api.invalidate_aes_cache("A-suffix")
+    assert "A" not in api._aes_cache
+    assert "B" in api._aes_cache
+
+
+# ── get_related_device ─────────────────────────────────────────────
+
+
+def test_get_related_device_hyphenated(patched_api) -> None:
+    """Hyphenated serial → return the suffix without a cloud call."""
+    out = patched_api.get_related_device("MAIN1234-SUB5678")
+    assert out == "SUB5678"
+    patched_api._client.get_device_infos.assert_not_called()
+
+
+def test_get_related_device_from_resource_infos(patched_api) -> None:
+    patched_api._client.get_device_infos.return_value = {
+        "resourceInfos": [
+            {"deviceSerial": "MAIN"},  # same as main → ignored
+            {"deviceSerial": "SUB-1"},
+        ],
+    }
+    assert patched_api.get_related_device("MAIN") == "SUB-1"
+
+
+def test_get_related_device_falls_back_to_camera_infos(patched_api) -> None:
+    patched_api._client.get_device_infos.return_value = {
+        "resourceInfos": [],
+        "cameraInfos": [{"deviceSerial": "CAM-9"}],
+    }
+    assert patched_api.get_related_device("MAIN") == "CAM-9"
+
+
+def test_get_related_device_no_candidates_returns_main(patched_api) -> None:
+    patched_api._client.get_device_infos.return_value = {"resourceInfos": []}
+    assert patched_api.get_related_device("MAIN") == "MAIN"
+
+
+def test_get_related_device_swallows_exception(patched_api) -> None:
+    patched_api._client.get_device_infos.side_effect = PyEzvizError("nope")
+    assert patched_api.get_related_device("MAIN") == "MAIN"
+
+
+# ── list_devices ───────────────────────────────────────────────────
+
+
+def test_list_devices_normalises_names(patched_api) -> None:
+    patched_api._client.get_device_infos.return_value = {
+        "S1": {"name": "Front Door"},
+        "S2": {"deviceName": "Back Door"},
+        "S3": {},  # no name → fall back to "Device"
+    }
+    out = patched_api.list_devices()
+    assert out == {
+        "S1": {"device_name": "Front Door"},
+        "S2": {"device_name": "Back Door"},
+        "S3": {"device_name": "Device"},
+    }
+
+
+def test_list_devices_returns_empty_on_error(patched_api) -> None:
+    patched_api._client.get_device_infos.side_effect = PyEzvizError("nope")
+    assert patched_api.list_devices() == {}
+
+
+# ── _try_unlock / unlock_door / unlock_gate ─────────────────────────
+
+
+def test_try_unlock_happy_path(patched_api) -> None:
+    assert patched_api._try_unlock("SER", 2) is True
+    patched_api._client.remote_unlock.assert_called_once_with(
+        "SER", "user@example.com", 2
+    )
+
+
+def test_try_unlock_returns_false_on_exception(patched_api) -> None:
+    patched_api._client.remote_unlock.side_effect = RuntimeError("nope")
+    assert patched_api._try_unlock("SER", 2) is False
+
+
+def test_try_unlock_uses_username_when_token_missing_username(patched_api) -> None:
+    patched_api._token = {"session_id": "tok"}  # no ``username`` field
+    patched_api._try_unlock("SER", 1)
+    patched_api._client.remote_unlock.assert_called_once_with(
+        "SER", "user@example.com", 1
+    )
+
+
+def test_unlock_door_uses_lock_no_2(patched_api) -> None:
+    patched_api.unlock_door("SER")
+    patched_api._client.remote_unlock.assert_called_once_with(
+        "SER", "user@example.com", DEFAULT_DOOR_LOCK_NO
+    )
+
+
+def test_unlock_gate_uses_lock_no_1(patched_api) -> None:
+    patched_api.unlock_gate("SER")
+    patched_api._client.remote_unlock.assert_called_once_with(
+        "SER", "user@example.com", DEFAULT_GATE_LOCK_NO
+    )
+
+
+# ── get_status ─────────────────────────────────────────────────────
+
+
+def test_get_status_raises_when_client_uninitialised(monkeypatch) -> None:
+    """``ensure_client`` succeeds without raising but doesn't set
+    ``_client`` → ``get_status`` must complain loudly.
+    """
+    api = Hp7Api(username="u")
+    monkeypatch.setattr(api, "ensure_client", lambda: None)
+    # ensure_client is a no-op stub above so _client stays None
+    with pytest.raises(RuntimeError, match="cloud client not initialised"):
+        api.get_status("SER")
+
+
+def test_get_status_maps_all_fields(patched_api, cam_status) -> None:
+    raw = {
+        "name": cam_status["name"],
+        "version": cam_status["version"],
+        "upgrade_available": cam_status["upgrade_available"],
+        "status": cam_status["status"],
+        "wan_ip": cam_status["wan_ip"],
+        "Seconds_Last_Trigger": cam_status["seconds_last_trigger"],
+        "last_alarm_time": cam_status["last_alarm_time"],
+        "last_alarm_pic": cam_status["last_alarm_pic"],
+        "last_alarm_type_name": cam_status["alarm_name"],
+        "WIFI": {
+            "ssid": cam_status["ssid"],
+            "signal": cam_status["signal"],
+            "address": "WIFI-IP",  # used as fallback when local_ip missing
+        },
+        "local_ip": cam_status["local_ip"],
+        "local_rtsp_port": cam_status["local_rtsp_port"],
+    }
+    api_mod.EzvizCamera.return_value.status.return_value = raw
+    out = patched_api.get_status("SER")
+    for key, expected in cam_status.items():
+        assert out[key] == expected, key
+
+
+def test_get_status_local_rtsp_port_defaults_to_554(patched_api) -> None:
+    api_mod.EzvizCamera.return_value.status.return_value = {
+        "name": "D",
+        "WIFI": {},
+        "local_rtsp_port": None,
+    }
+    out = patched_api.get_status("SER")
+    assert out["local_rtsp_port"] == "554"
+
+
+def test_get_status_local_ip_falls_back_to_wifi_address(patched_api) -> None:
+    api_mod.EzvizCamera.return_value.status.return_value = {
+        "name": "D",
+        "local_ip": None,
+        "WIFI": {"address": "10.0.0.5"},
+    }
+    out = patched_api.get_status("SER")
+    assert out["local_ip"] == "10.0.0.5"
+
+
+# ── close ──────────────────────────────────────────────────────────
+
+
+def test_close_logs_out_and_clears_client(patched_api) -> None:
+    client = patched_api._client
+    patched_api.close()
+    client.logout.assert_called_once()
+    assert patched_api._client is None
+
+
+def test_close_swallows_logout_errors(patched_api) -> None:
+    patched_api._client.logout.side_effect = PyEzvizError("offline")
+    patched_api.close()  # no raise
+    assert patched_api._client is None
+
+
+def test_close_is_a_noop_without_client() -> None:
+    api = Hp7Api(username="u")
+    api.close()  # no raise
+    assert api._client is None
+
+
+# ── token property ─────────────────────────────────────────────────
+
+
+def test_token_property_returns_stored(fake_token) -> None:
+    api = Hp7Api(username="u", token=fake_token)
+    assert api.token is fake_token
