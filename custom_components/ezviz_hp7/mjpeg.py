@@ -14,8 +14,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from typing import TYPE_CHECKING
 
 from aiohttp import web
+
+if TYPE_CHECKING:
+    from .stats import ActivityStats
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -76,6 +81,7 @@ async def serve_mjpeg(
     width: int,
     height: int,
     quality: int,
+    stats: "ActivityStats | None" = None,
 ) -> web.StreamResponse:
     """Stream a continuous MJPEG response back to the HTTP client.
 
@@ -86,7 +92,14 @@ async def serve_mjpeg(
     cmd = _build_ffmpeg_cmd(
         upstream_url, fps=fps, width=width, height=height, quality=quality,
     )
-    _LOGGER.debug("starting MJPEG ffmpeg: %s", " ".join(cmd))
+    if stats is not None:
+        stats.mjpeg_sessions += 1
+    started_at = time.monotonic()
+    peer = request.remote
+    _LOGGER.info(
+        "[MJPEG] session START client=%s upstream=%s (%dx%d @ %dfps q=%d)",
+        peer, upstream_url, width, height, fps, quality,
+    )
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -109,18 +122,28 @@ async def serve_mjpeg(
     await response.prepare(request)
 
     stderr_task = asyncio.create_task(_drain_stderr(proc))
-
+    total_bytes = 0
+    error: BaseException | None = None
     try:
         assert proc.stdout is not None
         while True:
             chunk = await proc.stdout.read(64 * 1024)
             if not chunk:
                 break
+            total_bytes += len(chunk)
             try:
                 await response.write(chunk)
-            except (ConnectionResetError, ConnectionAbortedError, asyncio.CancelledError):
-                _LOGGER.debug("MJPEG client disconnected")
+            except (ConnectionResetError, ConnectionAbortedError, asyncio.CancelledError) as exc:
+                _LOGGER.info("[MJPEG] client %s disconnected mid-stream", peer)
+                error = exc
                 break
+    except BaseException as exc:  # noqa: BLE001
+        if stats is not None:
+            stats.errors_mjpeg += 1
+        error = exc
+        _LOGGER.warning("[MJPEG] session error: %s", exc)
+        if not isinstance(exc, asyncio.CancelledError):
+            raise
     finally:
         await _terminate(proc)
         stderr_task.cancel()
@@ -132,6 +155,14 @@ async def serve_mjpeg(
             await response.write_eof()
         except (ConnectionResetError, ConnectionAbortedError):
             pass
+        duration = time.monotonic() - started_at
+        _LOGGER.info(
+            "[MJPEG] session END client=%s duration=%.1fs bytes=%d KB/s=%.1f%s",
+            peer, duration, total_bytes,
+            (total_bytes / 1024 / duration) if duration > 0 else 0,
+            f" error={type(error).__name__}" if error is not None
+            and not isinstance(error, (ConnectionResetError, ConnectionAbortedError)) else "",
+        )
 
     return response
 
