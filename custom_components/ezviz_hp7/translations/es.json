@@ -23,6 +23,13 @@
         "data": {
           "serial": "Número de Serie"
         }
+      },
+      "camera_password": {
+        "title": "Contraseña de la cámara",
+        "description": "Ingrese la contraseña de administrador de la cámara {serial} para streaming LAN. Deje vacío para detección automática.",
+        "data": {
+          "camera_password": "Contraseña de la cámara"
+        }
       }
     },
     "error": {
@@ -31,6 +38,17 @@
     "abort": {
       "no_devices": "No se encontraron dispositivos en la cuenta.",
       "already_configured": "El dispositivo ya está configurado"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opciones de vista en directo",
+        "description": "Elige cómo se entrega el vídeo en directo al dashboard.",
+        "data": {
+          "live_view_mode": "Modo de vista en directo"
+        }
+      }
     }
   },
   "entity": {

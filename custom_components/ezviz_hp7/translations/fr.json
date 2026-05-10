@@ -23,6 +23,13 @@
         "data": {
           "serial": "Numéro de série"
         }
+      },
+      "camera_password": {
+        "title": "Mot de passe de la caméra",
+        "description": "Entrez le mot de passe admin de la caméra {serial} pour le streaming LAN. Laissez vide pour détection automatique.",
+        "data": {
+          "camera_password": "Mot de passe de la caméra"
+        }
       }
     },
     "error": {
