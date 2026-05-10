@@ -122,6 +122,15 @@
         "name": "Cerradura Desbloqueada"
       }
     },
+    "select": {
+      "live_view_mode": {
+        "name": "Modo de vista en directo",
+        "state": {
+          "mjpeg": "MJPEG (baja latencia)",
+          "hls": "HLS (alta calidad)"
+        }
+      }
+    },
     "button": {
       "unlock_gate": {
         "name": "Desbloquear Portón"

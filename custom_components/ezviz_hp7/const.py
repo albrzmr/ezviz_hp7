@@ -6,7 +6,7 @@ CONF_SERIAL = "serial"
 CONF_CAMERA_PASSWORD = "camera_password"
 
 # Platforms to set up
-PLATFORMS = ["button", "sensor", "binary_sensor", "camera"]
+PLATFORMS = ["button", "sensor", "binary_sensor", "camera", "select"]
 
 # Poll interval in seconds (2 seconds for fast event detection)
 UPDATE_INTERVAL_SEC = 2
