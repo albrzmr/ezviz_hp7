@@ -18,9 +18,7 @@ from custom_components.ezviz_hp7.pylocalapi.cas import _extract_sign_from_jwt
 def _make_jwt(payload: dict) -> str:
     """Build a JWT-shaped string with the given payload (signature ignored)."""
     header = base64.urlsafe_b64encode(b'{"alg":"HS256"}').decode().rstrip("=")
-    body = (
-        base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
-    )
+    body = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
     return f"{header}.{body}.signature"
 
 

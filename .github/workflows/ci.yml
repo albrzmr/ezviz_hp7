@@ -71,7 +71,10 @@ jobs:
           # Runtime deps so mypy can resolve ``from pyezvizapi`` etc.
           pip install pyezvizapi cryptography pycryptodome
       - name: mypy
-        run: mypy custom_components/ezviz_hp7/ --ignore-missing-imports
+        # Use pyproject.toml's ``[tool.mypy]`` config so ``files`` and
+        # the ``cpd7/`` ``exclude`` apply (research code, has its own
+        # tests upstream).
+        run: mypy --config-file pyproject.toml
 
   # ── 4. Unit tests + coverage ──────────────────────────────────────
   test:
