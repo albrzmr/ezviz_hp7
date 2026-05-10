@@ -58,7 +58,8 @@ async def async_setup_entry(
     serial: str = data["serial"]
     relay: CpdMpegPsRelay | None = data.get("relay")
     mode: str = data.get("live_view_mode", DEFAULT_LIVE_VIEW_MODE)
-    async_add_entities([Hp7Camera(hass, coordinator, serial, relay, mode)])
+    stats = data.get("stats")
+    async_add_entities([Hp7Camera(hass, coordinator, serial, relay, mode, stats)])
 
 
 class Hp7Camera(Camera, CoordinatorEntity):
@@ -74,6 +75,7 @@ class Hp7Camera(Camera, CoordinatorEntity):
         serial: str,
         relay: CpdMpegPsRelay | None,
         live_view_mode: str = DEFAULT_LIVE_VIEW_MODE,
+        stats: Any = None,
     ) -> None:
         Camera.__init__(self)
         CoordinatorEntity.__init__(self, coordinator)
@@ -81,6 +83,7 @@ class Hp7Camera(Camera, CoordinatorEntity):
         self._serial = serial
         self._relay = relay
         self._live_view_mode = live_view_mode
+        self._stats = stats
         self._attr_unique_id = f"{DOMAIN}_{serial}_camera"
         # In HLS mode we let HA's Stream component handle live view; in
         # MJPEG mode we override ``handle_async_mjpeg_stream`` instead, so
@@ -142,6 +145,7 @@ class Hp7Camera(Camera, CoordinatorEntity):
             width=MJPEG_DEFAULT_WIDTH,
             height=MJPEG_DEFAULT_HEIGHT,
             quality=MJPEG_DEFAULT_QUALITY,
+            stats=self._stats,
         )
 
     # ── Snapshot fallback ─────────────────────────────────────────────────

@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
     from .api import Hp7Api
+    from .stats import ActivityStats
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ class Hp7Coordinator(DataUpdateCoordinator):
         entry: "ConfigEntry",
         api: "Hp7Api",
         serial: str,
+        stats: "ActivityStats | None" = None,
     ) -> None:
         """Initialize the coordinator.
 
@@ -43,9 +45,12 @@ class Hp7Coordinator(DataUpdateCoordinator):
         )
         self.api = api
         self.serial = serial
+        self._stats = stats
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch latest device status from the API on every tick."""
+        if self._stats is not None:
+            self._stats.cloud_polls += 1
         return await self.hass.async_add_executor_job(
             self.api.get_status, self.serial
         )

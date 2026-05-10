@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from .pylocalapi.client import EzvizClient
 from .pylocalapi.camera import EzvizCamera
 from .pylocalapi.cas import EzvizCAS
+
+if TYPE_CHECKING:
+    from .stats import ActivityStats
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,6 +43,7 @@ class Hp7Api:
         password: str | None = None,
         region: str = "eu",
         token: dict[str, Any] | None = None,
+        stats: "ActivityStats | None" = None,
     ) -> None:
         """Initialize EZVIZ API client.
 
@@ -48,6 +52,9 @@ class Hp7Api:
             password: EZVIZ account password.
             region: API region (eu, us, cn, as, sa, ru).
             token: Optional cached authentication token.
+            stats: Activity counter — incremented on logins, AES fetches,
+                cache hits/misses and CAS errors so the integration can
+                emit a periodic usage summary.  Optional.
         """
         self._username = username
         self._password = password
@@ -58,6 +65,7 @@ class Hp7Api:
         self.supports_door = True
         self.supports_gate = True
         self.model: str = "HP7"
+        self._stats = stats
         # Cache for the AES-128 control key keyed by bare serial.  The
         # value is a ``(key_bytes, fetched_at_monotonic)`` tuple; entries
         # older than ``AES_KEY_TTL`` are refetched.  The cache is also
@@ -108,11 +116,18 @@ class Hp7Api:
         if not self._client:
             raise RuntimeError("Client not initialized")
 
+        t0 = time.monotonic()
         try:
             self._token = self._client.login()
-            _LOGGER.debug("EZVIZ authentication successful")
+            elapsed = time.monotonic() - t0
+            _LOGGER.info(
+                "[EZVIZ-AUTH] cloud login OK (%.0f ms, account=%s, region=%s)",
+                elapsed * 1000, self._username, self._region,
+            )
+            if self._stats is not None:
+                self._stats.cloud_logins += 1
         except (ValueError, KeyError) as exc:
-            _LOGGER.error("EZVIZ authentication failed: %s", exc)
+            _LOGGER.error("[EZVIZ-AUTH] cloud login FAILED: %s", exc)
             raise ValueError(f"Authentication failed: {exc}") from exc
 
     def login(self) -> bool:
@@ -188,7 +203,13 @@ class Hp7Api:
             cached = self._aes_cache.get(bare)
             if cached is not None:
                 key, fetched_at = cached
-                if (time.monotonic() - fetched_at) < self.AES_KEY_TTL:
+                age = time.monotonic() - fetched_at
+                if age < self.AES_KEY_TTL:
+                    if self._stats is not None:
+                        self._stats.aes_cache_hits += 1
+                    _LOGGER.debug(
+                        "[EZVIZ-AES] cache HIT for %s (age=%.0fs)", bare, age,
+                    )
                     return key
 
         def _try_once() -> str:
@@ -205,28 +226,59 @@ class Hp7Api:
                 if tok:
                     self._token = tok
             except Exception as exc:  # noqa: BLE001
-                _LOGGER.debug("Token refresh failed before AES fetch: %s", exc)
+                _LOGGER.debug("[EZVIZ-AES] token refresh failed before AES fetch: %s", exc)
 
         if not self._token:
             raise RuntimeError("no cloud token available")
 
+        if force:
+            if self._stats is not None:
+                self._stats.aes_force_refreshes += 1
+            _LOGGER.info("[EZVIZ-AES] cache forced-refresh for %s", bare)
+        else:
+            if self._stats is not None:
+                self._stats.aes_cache_misses += 1
+            _LOGGER.info("[EZVIZ-AES] cache MISS for %s — calling EUCAS", bare)
+
+        t0 = time.monotonic()
         try:
             key = _try_once()
         except Exception as exc:  # noqa: BLE001
-            _LOGGER.warning("AES key fetch failed (will retry with re-login): %s", exc)
+            if self._stats is not None:
+                self._stats.errors_cas += 1
+            _LOGGER.warning(
+                "[EZVIZ-AES] EUCAS call FAILED (%s) — retrying with fresh login",
+                exc,
+            )
             # Force a re-login and retry once
             try:
                 self._login_and_store_token()
+                if self._stats is not None:
+                    self._stats.cloud_relogins += 1
             except Exception as relog_exc:  # noqa: BLE001
+                if self._stats is not None:
+                    self._stats.errors_cas += 1
                 raise RuntimeError(
                     f"AES fetch failed and re-login failed: {relog_exc}"
                 ) from relog_exc
             key = _try_once()
 
+        elapsed = time.monotonic() - t0
         if not key or len(key) != 16:
             raise RuntimeError(f"invalid AES key from EUCAS: {key!r}")
         key_bytes = key.encode("ascii")
+        # Detect a key rotation (re-pairing) — useful signal for the user.
+        prior = self._aes_cache.get(bare)
+        if prior is not None and prior[0] != key_bytes:
+            _LOGGER.warning(
+                "[EZVIZ-AES] KEY ROTATED for %s — doorbell appears to have been "
+                "re-paired since last fetch",
+                bare,
+            )
         self._aes_cache[bare] = (key_bytes, time.monotonic())
+        _LOGGER.info(
+            "[EZVIZ-AES] EUCAS fetch OK for %s (%.0f ms)", bare, elapsed * 1000,
+        )
         return key_bytes
 
     def invalidate_aes_cache(self, serial: str | None = None) -> None:
@@ -236,6 +288,9 @@ class Hp7Api:
         cause is that the doorbell was re-paired, which rotates the
         key.  Next ``fetch_lan_aes_key`` call will hit EUCAS again.
         """
+        if self._stats is not None:
+            self._stats.aes_invalidations += 1
+        _LOGGER.info("[EZVIZ-AES] cache invalidated (serial=%s)", serial or "all")
         if serial is None:
             self._aes_cache.clear()
             return

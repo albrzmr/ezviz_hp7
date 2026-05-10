@@ -19,8 +19,14 @@ from .const import (
 from .api import Hp7Api
 from .coordinator import Hp7Coordinator
 from .tcp_relay import CpdMpegPsRelay
+from .stats import ActivityStats
 
 _LOGGER = logging.getLogger(__name__)
+
+
+# Period between activity-summary log lines.  Short enough to spot
+# trends during a beta session, long enough not to spam the log.
+_STATS_SUMMARY_INTERVAL = timedelta(minutes=5)
 
 
 # Refresh the AES-128 control key roughly twice within its TTL.  The
@@ -54,15 +60,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     serial: str = entry.data["serial"]
     token: dict[str, Any] | None = entry.data.get("token")
 
+    stats = ActivityStats()
+    _LOGGER.info(
+        "[SETUP] starting EZVIZ HP7 entry %s (serial=%s, region=%s)",
+        entry.entry_id, serial, region,
+    )
+
     try:
-        api = Hp7Api(username, password, region, token=token)
+        api = Hp7Api(username, password, region, token=token, stats=stats)
         await hass.async_add_executor_job(api.login)
         await hass.async_add_executor_job(api.detect_capabilities, serial)
     except Exception as exc:
         _LOGGER.error("Failed to connect to EZVIZ HP7 API: %s", exc)
         raise ConfigEntryNotReady(f"Cannot connect to EZVIZ HP7: {exc}") from exc
 
-    coordinator = Hp7Coordinator(hass, entry, api, serial)
+    coordinator = Hp7Coordinator(hass, entry, api, serial, stats=stats)
     try:
         await coordinator.async_config_entry_first_refresh()
     except Exception as exc:
@@ -93,6 +105,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         host_provider=_host_provider,
         related_provider=_related_provider,
         get_aes_key=_aes_key_provider,
+        stats=stats,
     )
     try:
         await relay.async_start()
@@ -103,6 +116,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     live_view_mode: str = entry.options.get(
         CONF_LIVE_VIEW_MODE, DEFAULT_LIVE_VIEW_MODE
     )
+    _LOGGER.info(
+        "[SETUP] entry %s ready (mode=%s, relay=%s)",
+        entry.entry_id, live_view_mode,
+        relay.url if relay else "DISABLED",
+    )
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "api": api,
@@ -110,6 +128,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "coordinator": coordinator,
         "relay": relay,
         "live_view_mode": live_view_mode,
+        "stats": stats,
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -124,9 +143,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await hass.async_add_executor_job(
                 api.fetch_lan_aes_key, serial, True,  # force=True
             )
-            _LOGGER.debug("EZVIZ HP7: AES key cache refreshed")
         except Exception as exc:  # noqa: BLE001
-            _LOGGER.debug("EZVIZ HP7: AES key refresh failed: %s", exc)
+            _LOGGER.warning("[AES-WARMUP] periodic AES refresh failed: %s", exc)
 
     hass.async_create_background_task(
         _refresh_aes(), name="ezviz_hp7_aes_warmup",
@@ -142,6 +160,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # appears with no extra setup latency.
     if relay is not None:
         _install_event_prewarm(hass, entry, coordinator, relay)
+
+    # ── Periodic activity summary for log analysis ────────────────
+    @callback
+    def _log_stats_summary(_now: object | None = None) -> None:
+        stats.log_summary()
+
+    entry.async_on_unload(
+        async_track_time_interval(hass, _log_stats_summary, _STATS_SUMMARY_INTERVAL)
+    )
 
     return True
 
@@ -171,22 +198,32 @@ def _install_event_prewarm(
         data = coordinator.data or {}
         motion_now = bool(data.get("Motion_Trigger"))
         alarm_time_now = data.get("last_alarm_time")
+        alarm_name_now = data.get("alarm_name")
 
-        triggered = (
-            (motion_now and not state["motion"])
-            or (alarm_time_now is not None and alarm_time_now != state["alarm_time"])
+        motion_triggered = motion_now and not state["motion"]
+        alarm_triggered = (
+            alarm_time_now is not None and alarm_time_now != state["alarm_time"]
         )
         state["motion"] = motion_now
         state["alarm_time"] = alarm_time_now
 
-        if not triggered:
+        if not (motion_triggered or alarm_triggered):
             return
-        _LOGGER.info(
-            "EZVIZ HP7: doorbell event detected — pre-warming live stream "
-            "(motion=%s alarm_time=%s)", motion_now, alarm_time_now,
-        )
+
+        if alarm_triggered:
+            trigger = "alarm"
+            _LOGGER.info(
+                "[EVENT] alarm detected (name=%s, time=%s) — pre-warming",
+                alarm_name_now, alarm_time_now,
+            )
+        else:
+            trigger = "motion"
+            _LOGGER.info(
+                "[EVENT] motion detected (Motion_Trigger=%s) — pre-warming",
+                motion_now,
+            )
         hass.async_create_background_task(
-            relay.async_prewarm(_PREWARM_HOLD_SECONDS),
+            relay.async_prewarm(_PREWARM_HOLD_SECONDS, trigger=trigger),
             name="ezviz_hp7_prewarm",
         )
 
@@ -213,7 +250,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         api: Hp7Api | None = data.get("api")
         if api:
             api.close()
-        _LOGGER.debug("EZVIZ HP7 integration unloaded for entry %s", entry.entry_id)
+        # One last summary so the log captures what happened during the
+        # entry's lifetime, useful when reviewing reloads.
+        stats: ActivityStats | None = data.get("stats")
+        if stats is not None:
+            _LOGGER.info("[UNLOAD] final stats for entry %s:", entry.entry_id)
+            stats.log_summary()
 
     return unload_ok
 
