@@ -1,0 +1,40 @@
+# Pre-commit hooks — run locally before each commit AND in the
+# ``pre-commit`` job in ``.github/workflows/ci.yml``.  Mirrors the same
+# tools / versions used in CI so a clean local commit means a clean CI.
+#
+# Install once with::
+#
+#     pip install pre-commit
+#     pre-commit install
+#
+# Run on demand against everything::
+#
+#     pre-commit run --all-files
+
+repos:
+  # ── Ruff: lint + format ─────────────────────────────────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Pin to the same ruff release that CI uses (see pyproject.toml
+    # / .github/workflows/ci.yml).
+    rev: v0.15.12
+    hooks:
+      - id: ruff
+        # ``--fix`` so trivial issues are auto-corrected on commit.
+        # ``--exit-non-zero-on-fix`` makes the hook fail when fixes
+        # were applied so the user re-stages the corrected files.
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  # ── Generic file hygiene ────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-yaml
+      - id: check-json
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+        args: [--fix=lf]

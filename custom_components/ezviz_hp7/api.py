@@ -7,7 +7,6 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from pyezvizapi.camera import EzvizCamera
-from pyezvizapi.cas import EzvizCAS
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.exceptions import (
     EzvizAuthTokenExpired,
@@ -17,6 +16,21 @@ from pyezvizapi.exceptions import (
     InvalidURL,
     PyEzvizError,
 )
+
+# IMPORTANT: do NOT import ``EzvizCAS`` from ``pyezvizapi``.  The
+# upstream version (1.0.4.9 and earlier) sends ``<ClientType>0</ClientType>``
+# and reads the response with a single ``recv(1024)`` call without
+# proper packet framing — which works for the legacy NetSDK login
+# path but produces a garbled AES-128 control key when used against
+# HP7 / CP7 firmware that expects ``ClientType=3`` (the Pixel
+# signature).  Garbled key → INVITE XML encrypted with the wrong
+# secret → doorbell returns binary noise → ``xml.etree`` raises
+# ``no element found: line 1, column 0`` and the LAN session aborts.
+#
+# We keep our own patched ``EzvizCAS`` (vendored from sessions 22-28
+# of the reverse-engineering work) here as a single file until the
+# fix is merged upstream.  See lessons-learned.md, lección 7b.
+from .pylocalapi.cas import EzvizCAS
 
 if TYPE_CHECKING:
     from .stats import ActivityStats

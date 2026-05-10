@@ -1,5 +1,13 @@
 # Home Assistant Integration for EZVIZ HP7 / CP7 Intercom
 
+[![CI](https://github.com/albrzmr/ezviz_hp7/actions/workflows/ci.yml/badge.svg)](https://github.com/albrzmr/ezviz_hp7/actions/workflows/ci.yml)
+[![HACS Validation](https://github.com/albrzmr/ezviz_hp7/actions/workflows/ci.yml/badge.svg?event=schedule)](https://github.com/albrzmr/ezviz_hp7/actions)
+[![codecov](https://codecov.io/gh/albrzmr/ezviz_hp7/branch/main/graph/badge.svg)](https://codecov.io/gh/albrzmr/ezviz_hp7)
+[![HACS](https://img.shields.io/badge/HACS-Default-orange.svg)](https://github.com/hacs/integration)
+[![Code style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit)](https://github.com/pre-commit/pre-commit)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 ## Before you enjoy the integration — say hi to the people behind it
 
 Two folks made this possible: **[silviosmart](https://ko-fi.com/silviosmart)**,

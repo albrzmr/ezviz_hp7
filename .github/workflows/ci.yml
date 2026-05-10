@@ -1,0 +1,110 @@
+# Consolidated CI: hassfest + ruff + mypy + pytest+codecov + HACS validate.
+#
+# Replaces three separate workflows that previously lived alongside each
+# other (``ci.yaml``, ``hassfest.yaml``, ``hacs_action.yaml``).  Every job
+# here is independent — when one fails, the rest still run, so a PR
+# author can see the full picture instead of fixing-and-re-pushing.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Allow manual runs (e.g. to re-validate after a HACS / brands update)
+  workflow_dispatch:
+
+# Cancel queued runs on the same ref to keep CI fast on rapid pushes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ── 1. Home Assistant manifest / structure validation ─────────────
+  hassfest:
+    name: hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ``home-assistant/actions/hassfest`` is only published from
+      # ``@main`` — pinning to a SHA breaks weekly schema updates that
+      # the action ships, so the upstream docs require ``@main``.
+      - uses: home-assistant/actions/hassfest@master
+
+  # ── 2. Lint + format with Ruff ────────────────────────────────────
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: install ruff
+        run: pip install "ruff==0.15.12"
+      - name: ruff check
+        run: ruff check .
+      - name: ruff format --check
+        run: ruff format --check .
+
+  # ── 3. Static type checking with mypy ─────────────────────────────
+  typecheck:
+    name: mypy
+    runs-on: ubuntu-latest
+    # First-iteration policy: report findings but don't gate merges
+    # while the codebase grows its type coverage.  Flip to ``false``
+    # once the integration is fully typed.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: install
+        run: |
+          python -m pip install --upgrade pip
+          pip install mypy
+          # Runtime deps so mypy can resolve ``from pyezvizapi`` etc.
+          pip install pyezvizapi cryptography pycryptodome
+      - name: mypy
+        run: mypy custom_components/ezviz_hp7/ --ignore-missing-imports
+
+  # ── 4. Unit tests + coverage ──────────────────────────────────────
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: pytest
+        run: pytest tests/ --cov=custom_components/ezviz_hp7 --cov-report=xml --cov-report=term -v
+      - name: upload coverage to codecov
+        # ``CODECOV_TOKEN`` is optional for public repos but required if
+        # the maintainer ever flips this to a private fork.  Set it as a
+        # repository secret once the repo is registered at codecov.io.
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          fail_ci_if_error: false
+
+  # ── 5. HACS validation ────────────────────────────────────────────
+  hacs:
+    name: hacs validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ``hacs/action`` is only released from ``@main`` per HACS docs.
+      - uses: hacs/action@main
+        with:
+          category: integration
