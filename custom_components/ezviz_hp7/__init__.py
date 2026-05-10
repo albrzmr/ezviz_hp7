@@ -219,11 +219,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload a config entry.
-    
-    Args:
-        hass: Home Assistant instance.
-        entry: Config entry to reload.
+    """Reload the config entry through HA's state machine.
+
+    Calling ``async_unload_entry`` + ``async_setup_entry`` directly leaves
+    the entry in ``LOADED`` state, which makes
+    ``coordinator.async_config_entry_first_refresh`` raise
+    ``ConfigEntryError: ... should only be called in state
+    SETUP_IN_PROGRESS`` on HA 2024.12+ — and the reload aborts with all
+    entities stuck in ``unavailable``.  Delegating to
+    ``hass.config_entries.async_reload`` performs the proper state
+    transitions before re-running setup.
     """
-    await async_unload_entry(hass, entry)
-    await async_setup_entry(hass, entry)
+    await hass.config_entries.async_reload(entry.entry_id)
