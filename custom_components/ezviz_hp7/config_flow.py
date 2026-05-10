@@ -248,11 +248,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class OptionsFlowHandler(config_entries.OptionsFlow):
-    """Options flow for live-view mode selection."""
+    """Options flow for live-view mode selection.
 
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        """Store the config entry to read/write options on."""
-        self.config_entry = config_entry
+    HA 2024.12+ exposes ``self.config_entry`` automatically — do not
+    override ``__init__`` (assigning to ``config_entry`` raises
+    ``AttributeError: property has no setter`` on modern HA).
+    """
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None

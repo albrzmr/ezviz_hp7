@@ -109,6 +109,15 @@
         }
       }
     },
+    "select": {
+      "live_view_mode": {
+        "name": "Live view mode",
+        "state": {
+          "mjpeg": "MJPEG (low latency)",
+          "hls": "HLS (high quality)"
+        }
+      }
+    },
     "button": {
       "unlock_gate": {
         "name": "Sblocca Cancello"
