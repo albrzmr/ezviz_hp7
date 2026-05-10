@@ -23,6 +23,13 @@
         "data": {
           "serial": "Serial Number"
         }
+      },
+      "camera_password": {
+        "title": "Camera Password",
+        "description": "Enter the admin password for camera {serial} for LAN streaming. Leave empty for automatic discovery.",
+        "data": {
+          "camera_password": "Camera Password"
+        }
       }
     },
     "error": {
@@ -31,6 +38,17 @@
     "abort": {
       "no_devices": "No devices found in account.",
       "already_configured": "Device is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Live view options",
+        "description": "Choose how live video is delivered to the dashboard.",
+        "data": {
+          "live_view_mode": "Live view mode"
+        }
+      }
     }
   },
   "entity": {

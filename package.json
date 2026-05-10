@@ -1,16 +1,20 @@
 {
   "name": "ezviz_hp7",
-  "version": "0.3.1",
-  "description": "Home Assistant custom integration for Ezviz HP7",
+  "version": "0.5.0",
+  "description": "Home Assistant custom integration for EZVIZ HP7/CP7",
   "keywords": [
     "home-assistant",
     "ezviz",
     "hp7",
+    "cp7",
     "ezviz_hp7"
   ],
   "main": "sensor.py",
-  "repository": "git@github.com:bobsilvio/ezviz_hp7.git",
-  "author": "Bobsilvio <@gmail.com>",
+  "repository": "git@github.com:albrzmr/ezviz_hp7.git",
+  "author": "Bobsilvio",
+  "contributors": [
+    "albrzmr"
+  ],
   "license": "MIT",
   "dependencies": {}
 }

@@ -23,6 +23,13 @@
         "data": {
           "serial": "Numero di serie"
         }
+      },
+      "camera_password": {
+        "title": "Password videocamera",
+        "description": "Inserisci la password admin della videocamera {serial} per lo streaming LAN. Lasciare vuoto per rilevamento automatico.",
+        "data": {
+          "camera_password": "Password videocamera"
+        }
       }
     },
     "error": {
@@ -31,6 +38,17 @@
     "abort": {
       "no_devices": "Nessun dispositivo trovato nell'account.",
       "already_configured": "Dispositivo già configurato"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Live view options",
+        "description": "Choose how live video is delivered to the dashboard.",
+        "data": {
+          "live_view_mode": "Live view mode"
+        }
+      }
     }
   },
   "entity": {

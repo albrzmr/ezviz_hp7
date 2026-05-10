@@ -1,6 +1,6 @@
 {
   "domain": "ezviz_hp7",
-  "name": "EZVIZ HP7",
+  "name": "EZVIZ HP7/CP7",
   "codeowners": ["@Bobsilvio"],
   "config_flow": true,
   "dependencies": [],
@@ -10,10 +10,11 @@
   "loggers": ["ezviz"],
   "requirements": [
     "pycryptodome",
+    "cryptography",
     "pandas",
     "requests",
     "paho-mqtt",
     "xmltodict"
   ],
-  "version": "0.3.1"
+  "version": "0.6.0"
 }

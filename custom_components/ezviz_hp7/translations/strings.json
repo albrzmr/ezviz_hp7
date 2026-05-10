@@ -23,6 +23,13 @@
         "data": {
           "serial": "Numero di serie"
         }
+      },
+      "camera_password": {
+        "title": "Password videocamera",
+        "description": "Inserisci la password admin della videocamera {serial} per lo streaming LAN. Lasciare vuoto per rilevamento automatico.",
+        "data": {
+          "camera_password": "Password videocamera"
+        }
       }
     },
     "error": {

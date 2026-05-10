@@ -1,89 +1,127 @@
-[![Sample](https://storage.ko-fi.com/cdn/generated/zfskfgqnf/2025-03-07_rest-7d81acd901abf101cbdf54443c38f6f0-dlmmonph.jpg)](https://ko-fi.com/silviosmart)
+# Home Assistant Integration for EZVIZ HP7 / CP7 Intercom
 
-## Supportami / Support Me
+This is a **custom Home Assistant integration** for the **EZVIZ HP7 / CP7 video
+doorbell**.  It exposes the device in HA so you can **watch the live stream**,
+**unlock the door and gate**, see device status, and listen for ring / motion
+events — all on your local LAN, without depending on the EZVIZ NetSDK.
 
-Se ti piace il mio lavoro e vuoi che continui nello sviluppo delle card, puoi offrirmi un caffè.\
-If you like my work and want me to continue developing the cards, you can buy me a coffee.
-
-
-[![PayPal](https://img.shields.io/badge/Donate-PayPal-%2300457C?style=for-the-badge&logo=paypal&logoColor=white)](https://www.paypal.com/donate/?hosted_button_id=Z6KY9V6BBZ4BN)
-
-Non dimenticare di seguirmi sui social:\
-Don't forget to follow me on social media:
-
-[![TikTok](https://img.shields.io/badge/Follow_TikTok-%23000000?style=for-the-badge&logo=tiktok&logoColor=white)](https://www.tiktok.com/@silviosmartalexa)
-
-[![Instagram](https://img.shields.io/badge/Follow_Instagram-%23E1306C?style=for-the-badge&logo=instagram&logoColor=white)](https://www.instagram.com/silviosmartalexa)
-
-[![YouTube](https://img.shields.io/badge/Subscribe_YouTube-%23FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://www.youtube.com/@silviosmartalexa)
-
-# Home Assistant Integration for EZVIZ HP7 Intercom
-
-This is a **custom Home Assistant integration** that adds support for the **EZVIZ HP7 video intercom**.  
-It allows you to **unlock the door and the gate remotely**, monitor device status, and expose the main functions of the HP7 within your Home Assistant environment.
+This fork extends the original integration with a **pure-Python live-stream
+pipeline** that reverse-engineers and replaces EZVIZ's proprietary LAN protocol
+on ports 9010/9020.  No native SDK, no add-on container, no Frida, no emulator
+— just `cryptography` + `pycryptodome` + ffmpeg (which HA already ships).
 
 ---
 
-NOTE:
-
-If you're having trouble logging in, please note that EZVIZ only allows you to have 10 devices connected:
-
-EZVIZ -> User -> Login settings -> Manage terminals
-
-Delete any unused devices or free up at least 1 space.
+> **Heads-up — EZVIZ device limit.**  EZVIZ only allows 10 logged-in devices
+> per account.  If login fails, go to **EZVIZ app → User → Login settings →
+> Manage terminals** and remove any unused entries.
 
 ---
 
-## ✨ Features
+## Features
 
-- Discover and register your EZVIZ HP7 device automatically.
-- Control:
-  - 🔑 Unlock **door** (lock #2 by default).
-  - 🚪 Unlock **gate** (lock #1 by default).
-- Retrieve device information (firmware, version, online status, Wi-Fi signal, etc.).
-- Expose useful entities in Home Assistant for automation and dashboards.
-- Compatible with **multiple regions** (EU/US).
+- Auto-discovery and registration of your HP7 / CP7.
+- **Live video streaming** in HA, with two selectable modes:
+  - **MJPEG (default):** ~1 s glass-to-glass latency, universal browser
+    compatibility, transcoded on the fly to motion JPEG (720p, 8 fps).
+  - **HLS:** native 2K HEVC at 25 fps, ~10–20 s of delay; needs an
+    HEVC-capable client (Safari / iOS / hardware-decoded Android).
+- **Door unlock** (lock #2 by default).
+- **Gate unlock** (lock #1 by default).
+- Device sensors: firmware, online status, last alarm picture, ring/motion events.
+- Service calls usable from automations and scripts.
+- Multi-region support (EU / US / CN / AS / SA / RU).
+
+### Choosing the live-view mode
+
+The mode is selectable from **Settings → Devices & Services → EZVIZ HP7
+→ Configure**.  It defaults to MJPEG so the live view works in any
+browser and any HA Companion version.  Switch to HLS only if you want
+full 2K detail and have an HEVC-capable client.
+
+| Mode  | Latency  | Resolution / fps | CPU on HA host (per viewer) | Browser support |
+|-------|----------|------------------|------------------------------|-----------------|
+| MJPEG | ~1 s     | 1280×720 / 8 fps | one ffmpeg subprocess (~30–50 % of one core on Pi 4) | Universal |
+| HLS   | 10–20 s  | 2048×1296 / 25 fps | minimal (HA's built-in stream worker) | HEVC-capable only |
+
+### Live-stream notes
+
+- Each viewer triggers a fresh upstream session on the doorbell.  After
+  cloud token refresh + EUCAS round-trip + ECDH handshake the first
+  frame appears in roughly 1–2 s.
+- The AES-128 control key rotates whenever the doorbell is re-paired;
+  it is refetched per session via the EUCAS `0x2001 DirectConnect`
+  command.
+- For the standard **Camera** Lovelace card, leave the integration in
+  **HLS** mode (the card uses HA's stream worker).  For low-latency
+  MJPEG, use a **Picture Entity** card with `camera_view: live`.
 
 ---
 
-## 📦 Installation via HACS
+## Architecture (brief)
 
-1. Open Home Assistant  
-2. Go to **HACS > Integrations > Custom repositories**  
-3. Add: `https://github.com/Bobsilvio/ezviz_hp7` with type `Integration`  
-4. Search for `Ezviz Hp7` and install it  
-5. Restart Home Assistant  
-6. Go to **Settings > Devices & Services** and add the integration
+```
+HA Stream component → ffmpeg (PyAV) -i tcp://127.0.0.1:RANDOM
+                              ↑
+                      asyncio TCP relay (tcp_relay.py)
+                              ↑
+                      StreamDecoder  — gates output on HEVC VPS keyframe
+                              ↑   ECDH P-256 → AES-256-ECB → ChaCha20
+                      Cpd7LanClient — INIT 0x2013 / INVITE 0x2011 / PLAY 0x3105
+                              ↑   AES-128-CBC framing on ports 9010 + 9020
+                      AES-128 key from EUCAS cmd 0x2001 DirectConnect
+                              ↑
+                      pyezviz cloud login (existing token flow)
+```
 
-## 📦 Installation simple
-[![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=bobsilvio&repository=ezviz_hp7&category=integration)
+Reverse-engineering notes and the full wire-format spec live in `docs/` of
+the upstream research repo (Ghidra/jadx traces, Frida hooks, packet layouts).
 
 ---
 
-## ⚙️ Configuration
+## Installation via HACS
 
-1. In Home Assistant, go to **Settings → Devices & Services → Add Integration**.
+1. Open Home Assistant.
+2. Go to **HACS → Integrations → Custom repositories**.
+3. Add `https://github.com/albrzmr/ezviz_hp7` with type `Integration`.
+4. Search for `EZVIZ HP7` and install.
+5. Restart Home Assistant.
+6. Go to **Settings → Devices & Services → Add Integration**.
+
+[![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=albrzmr&repository=ezviz_hp7&category=integration)
+
+---
+
+## Configuration
+
+1. In HA, go to **Settings → Devices & Services → Add Integration**.
 2. Search for **EZVIZ HP7**.
-3. Enter your **EZVIZ account credentials**:
-   - **Username** (email used for EZVIZ app login).
+3. Enter:
+   - **Username** (email used for the EZVIZ app).
    - **Password**.
-   - **Region** (usually `eu` for Europe, `us` for North America).
+   - **Region** (`eu`, `us`, `cn`, `as`, `sa`, `ru`).
+4. Pick the device serial.  HP7 / CP7 serials look like
+   `MAINSERIAL-CAMSERIAL` (e.g. `BE0000000-BE0000000`).
 
-The integration will log in through the EZVIZ API and automatically detect your HP7 device.
+The integration logs in through the EZVIZ cloud API, fetches the AES key from
+EUCAS, and starts the local TCP relay used for streaming.
 
 ---
 
-## 🛠 Usage
+## Usage
 
-Once set up, you will see:
-- A device card for your **EZVIZ HP7 intercom**.
-- Two services exposed:
+After setup you'll see:
+
+- A `camera.ezviz_cp7_<serial>` entity exposing the live stream and last
+  alarm snapshot.
+- Sensors and binary sensors for firmware, online state, motion, ringing,
+  door / gate status, etc.
+- Two services:
   - `ezviz_hp7.unlock_door`
   - `ezviz_hp7.unlock_gate`
 
-These can be used in **automations, scripts, and dashboards**.
-
 Example automation:
+
 ```yaml
 alias: Unlock gate on RFID card
 trigger:
@@ -93,39 +131,80 @@ trigger:
 action:
   - service: ezviz_hp7.unlock_gate
     data:
-      serial: BE7062577-BE6963574
+      serial: BE0000000-BE0000000
 ```
 
 ---
 
-## 🚧 Limitations
+## Limitations
 
-- **Live video streaming** is not yet supported inside Home Assistant.  
-  The HP7 uses temporary tickets and relay servers, which are still under investigation.
-- The integration currently supports **one HP7 device per account** (multi-device support planned).
-
----
-
-## 🤝 Contributing
-
-Pull requests and issues are welcome!  
-If you encounter bugs or want to suggest new features, open an [issue](../../issues).
-
-This Integration use API from RanierM26 (https://github.com/RenierM26/pyEzvizApi)
-
----
-
-## 📜 License
-
-This project is released under a **proprietary license**.  
-It is provided **as-is**, without warranty of any kind.  
-You may use it in your personal Home Assistant installation, but redistribution is not permitted without explicit authorization.
+- **Two-way audio / talkback is not implemented.**  The pipeline today is
+  receive-only.
+- **HEVC playback depends on the client.**  If your browser cannot decode
+  HEVC (most Chromium on Windows/Linux, Firefox), the camera card will be
+  black even though the stream is healthy.  Workarounds: view from
+  Safari / iOS / Companion app, or add a HEVC→H.264 transcoding step in
+  the relay.
+- **One HP7 per config entry.**  Multi-device support is planned but not
+  required for typical setups (just add the integration once per device).
+- **Lock unlocks are issued via cloud.**  When the cloud is unreachable
+  the unlock services fail.
 
 ---
 
-## ☕ Support the project
+## Troubleshooting
 
-If you like this integration and want to support further development:  
-[![Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/silviosmart )
+Enable debug logging if the camera doesn't stream:
+
+```yaml
+# configuration.yaml
+logger:
+  logs:
+    custom_components.ezviz_hp7: debug
+    homeassistant.components.stream: debug
+```
+
+Useful log markers:
+
+- `tcp_relay] CPD7 relay listening on 127.0.0.1:NNNN` — relay started.
+- `tcp_relay] CPD7 relay client connected` — HA Stream worker connected.
+- `cpd7.lan_client] CPD7 PLAY ... rx_cmd=0x3106` — PLAY accepted by doorbell.
+- `cpd7.decoder] ChaCha20 key derived` — ECDH handshake OK.
+- `cpd7.decoder] keyframe found at +N (pack@M) — stream synced` — first
+  HEVC keyframe seen, bytes are flowing to ffmpeg.
+- `[libav.hevc] PPS id out of range` (repeated) — keyframe gating failed
+  (open an issue with logs).
 
 ---
+
+## Contributing
+
+Pull requests and issues welcome.  Bugs, feature ideas, log dumps for new
+firmware versions all useful.
+
+---
+
+## Credits
+
+- Original integration: [@Bobsilvio](https://github.com/Bobsilvio/ezviz_hp7).
+- Cloud API helpers: [pyEzvizApi](https://github.com/RenierM26/pyEzvizApi)
+  by RenierM26.
+
+---
+
+## Disclaimer
+
+This integration is provided **as-is**, with no warranty of any kind, and is
+intended for **personal use** with EZVIZ doorbells you own.
+
+EZVIZ's Terms of Service may prohibit reverse engineering and the use of
+non-official clients to access their devices and cloud services.  Installing
+or running this integration is entirely at your own risk — including the
+risk of EZVIZ suspending or terminating your account.  This project is not
+affiliated with, endorsed by, or sponsored by EZVIZ or Hikvision.
+
+---
+
+## License
+
+Released under the MIT License — see [LICENSE](LICENSE) for the full text.
