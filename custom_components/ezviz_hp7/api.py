@@ -6,6 +6,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
+import pyezvizapi.client as _ezviz_client_mod
 from pyezvizapi.camera import EzvizCamera
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.exceptions import (
@@ -22,14 +23,14 @@ from pyezvizapi.exceptions import (
 # and reads the response with a single ``recv(1024)`` call without
 # proper packet framing — which works for the legacy NetSDK login
 # path but produces a garbled AES-128 control key when used against
-# HP7 / CP7 firmware that expects ``ClientType=3`` (the Pixel
-# signature).  Garbled key → INVITE XML encrypted with the wrong
-# secret → doorbell returns binary noise → ``xml.etree`` raises
-# ``no element found: line 1, column 0`` and the LAN session aborts.
+# HP7 / CP7 firmware that expects ``ClientType=3`` and proper
+# 32B-header / body / 32B-tail framing.  Garbled key → INVITE XML
+# encrypted with the wrong secret → doorbell returns binary noise →
+# ``xml.etree`` raises ``no element found: line 1, column 0`` and the
+# LAN session aborts.
 #
-# We keep our own patched ``EzvizCAS`` (vendored from sessions 22-28
-# of the reverse-engineering work) here as a single file until the
-# fix is merged upstream.  See lessons-learned.md, lección 7b.
+# We keep our own patched ``EzvizCAS`` here as a single vendored
+# file until the fix is merged upstream.
 from .pylocalapi.cas import EzvizCAS
 
 if TYPE_CHECKING:
@@ -49,13 +50,6 @@ REGION_URLS: dict[str, str] = {
     "ru": "apirus.ezvizru.com",
 }
 
-# Hardcoded CAS servers for each region (from pcap/libezstreamclient analysis)
-CAS_SERVERS: dict[str, tuple[str, int]] = {
-    "eu": ("54.72.248.29", 6500),
-    "us": ("54.72.248.29", 6500),
-    "cn": ("54.72.248.29", 6500),
-}
-
 
 class Hp7Api:
     """EZVIZ HP7/CP7 API client for cloud and local operations."""
@@ -67,6 +61,7 @@ class Hp7Api:
         region: str = "eu",
         token: dict[str, Any] | None = None,
         stats: ActivityStats | None = None,
+        feature_code: str | None = None,
     ) -> None:
         """Initialize EZVIZ API client.
 
@@ -78,6 +73,13 @@ class Hp7Api:
             stats: Activity counter — incremented on logins, AES fetches,
                 cache hits/misses and CAS errors so the integration can
                 emit a periodic usage summary.  Optional.
+            feature_code: 32-char hex per-install featureCode.  When
+                provided, monkey-patches ``pyezvizapi.client.FEATURE_CODE``
+                and the session header so each install fingerprints
+                differently — no global hardcoded value EZVIZ could
+                blacklist.  Required for HP7 / CP7 LAN streaming
+                because the same code is used to derive ``<Sign>`` in
+                the EUCAS DirectConnect call.
         """
         self._username = username
         self._password = password
@@ -89,6 +91,7 @@ class Hp7Api:
         self.supports_gate = True
         self.model: str = "HP7"
         self._stats = stats
+        self._feature_code = feature_code
         # Cache for the AES-128 control key keyed by bare serial.  The
         # value is a ``(key_bytes, fetched_at_monotonic)`` tuple; entries
         # older than ``AES_KEY_TTL`` are refetched.  The cache is also
@@ -107,6 +110,25 @@ class Hp7Api:
         """Get the current authentication token."""
         return self._token
 
+    def _apply_feature_code(self) -> None:
+        """Patch ``pyezvizapi.client`` to use our per-install featureCode.
+
+        ``pyezvizapi`` imports ``FEATURE_CODE`` from ``constants`` into
+        the ``client`` module namespace and bakes it into login / device
+        payloads and the default session header.  Both paths must be
+        overridden for our random per-install code to take effect — and
+        the patch must happen *before* ``EzvizClient(...)`` is
+        constructed so the session header picks up the override at
+        ``self._session.headers.update(REQUEST_HEADER)`` time.
+        """
+        if not self._feature_code:
+            return
+        _ezviz_client_mod.FEATURE_CODE = self._feature_code
+        try:
+            _ezviz_client_mod.REQUEST_HEADER["featureCode"] = self._feature_code
+        except (AttributeError, TypeError):
+            _LOGGER.debug("[EZVIZ-AUTH] could not patch REQUEST_HEADER")
+
     def ensure_client(self) -> None:
         """Ensure EzvizClient is initialized.
 
@@ -117,6 +139,7 @@ class Hp7Api:
             return
 
         try:
+            self._apply_feature_code()
             self._client = EzvizClient(
                 account=self._username,
                 password=self._password,

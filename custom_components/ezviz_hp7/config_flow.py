@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from typing import Any
 
 import voluptuous as vol
@@ -12,6 +13,7 @@ from homeassistant.data_entry_flow import FlowResult
 
 from .api import Hp7Api
 from .const import (
+    CONF_FEATURE_CODE,
     CONF_LIVE_VIEW_MODE,
     CONF_REGION,
     CONF_SERIAL,
@@ -88,12 +90,19 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is None:
             return self.async_show_form(step_id="user", data_schema=DATA_SCHEMA)
 
+        # Generate a per-install random featureCode up front so the
+        # initial cloud login already carries it — the JWT's ``s``
+        # claim must match the value used in EUCAS ``<Sign>`` later
+        # (otherwise CAS DirectConnect returns a garbled AES key).
+        user_input[CONF_FEATURE_CODE] = secrets.token_hex(16)
+
         # Try to authenticate and list devices
         try:
             api = Hp7Api(
                 user_input["username"],
                 user_input["password"],
                 user_input[CONF_REGION],
+                feature_code=user_input[CONF_FEATURE_CODE],
             )
             ok = await self.hass.async_add_executor_job(api.login)
             if not ok:

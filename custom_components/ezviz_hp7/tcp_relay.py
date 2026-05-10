@@ -117,6 +117,25 @@ class CpdMpegPsRelay:
     def url(self) -> str:
         return f"tcp://{self._bind}:{self._port}"
 
+    @property
+    def has_active_viewer(self) -> bool:
+        """True while a downstream client is consuming the stream.
+
+        ``is_streaming`` for the camera entity maps to this.  Used by
+        ``Hp7Camera.is_streaming`` so the entity state shows
+        ``streaming`` instead of ``idle`` while the user is watching.
+        """
+        return self._writer is not None
+
+    @property
+    def is_warm(self) -> bool:
+        """True while the upstream LAN session is alive (with or without viewer).
+
+        Distinguishes pre-warmed sessions (relay is ready, no viewer
+        attached) from full-cold (no upstream at all).
+        """
+        return self._is_pump_alive()
+
     async def async_start(self) -> None:
         if self._server is not None:
             return
