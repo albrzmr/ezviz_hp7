@@ -373,7 +373,8 @@ class Hp7Api:
             lock_no: Lock number to unlock.
 
         Returns:
-            True if unlock was successful.
+            True if unlock was successful, False otherwise (network
+            error, invalid lock number, account / device mismatch …).
         """
         self.ensure_client()
         if not self._token or not self._client:
@@ -382,67 +383,63 @@ class Hp7Api:
         user_id = self._token.get("username") or self._username
         try:
             self._client.remote_unlock(serial, user_id, lock_no)
-            _LOGGER.info("Remote unlock OK (serial=%s, lock_no=%s)", serial, lock_no)
-            return True
-        except (KeyError, AttributeError, ValueError, Exception) as exc:
+        except Exception as exc:  # noqa: BLE001 — pyezvizapi raises various types
             _LOGGER.warning(
                 "Remote unlock failed (serial=%s, lock_no=%s): %s",
-                serial,
-                lock_no,
-                exc,
+                serial, lock_no, exc,
             )
             return False
+        _LOGGER.info("Remote unlock OK (serial=%s, lock_no=%s)", serial, lock_no)
+        return True
 
     def unlock_door(self, serial: str) -> bool:
-        """Unlock the door lock."""
-        return self._try_unlock(serial, DEFAULT_DOOR_LOCK_NO) or self._try_unlock(
-            serial, DEFAULT_GATE_LOCK_NO
-        )
+        """Unlock the door lock (lock #2 by default).
+
+        No fallback to the gate lock if this call fails — pressing
+        "unlock door" should never open the gate.  Same for
+        ``unlock_gate``.
+        """
+        return self._try_unlock(serial, DEFAULT_DOOR_LOCK_NO)
 
     def unlock_gate(self, serial: str) -> bool:
-        """Unlock the gate lock."""
-        return self._try_unlock(serial, DEFAULT_GATE_LOCK_NO) or self._try_unlock(
-            serial, DEFAULT_DOOR_LOCK_NO
-        )
+        """Unlock the gate lock (lock #1 by default).
+
+        Mirror of ``unlock_door`` — no cross-fallback.
+        """
+        return self._try_unlock(serial, DEFAULT_GATE_LOCK_NO)
 
     def get_status(self, serial: str) -> dict[str, Any]:
         """Get current device status.
 
-        Args:
-            serial: Device serial number.
-
-        Returns:
-            Dictionary with device status and sensor readings.
+        Propagates any error from the underlying cloud call so that the
+        coordinator can wrap it in ``UpdateFailed`` and HA marks
+        entities ``unavailable`` correctly.  Returning ``{}`` on errors
+        (the previous behaviour) hides connectivity failures from the
+        user and keeps stale entity values around forever.
         """
         self.ensure_client()
         if not self._client:
-            return {}
+            raise RuntimeError("EZVIZ HP7 cloud client not initialised")
 
-        try:
-            camera = EzvizCamera(self._client, serial)
-            cam_status = camera.status(refresh=True)
-            wifi_info = cam_status.get("WIFI", {})
+        camera = EzvizCamera(self._client, serial)
+        cam_status = camera.status(refresh=True)
+        wifi_info = cam_status.get("WIFI") or {}
+        _LOGGER.debug("Device status received for %s", serial)
 
-            _LOGGER.debug("Device status received for %s", serial)
-
-            return {
-                "name": cam_status.get("name"),
-                "version": cam_status.get("version"),
-                "upgrade_available": cam_status.get("upgrade_available"),
-                "status": cam_status.get("status"),
-                "wan_ip": cam_status.get("wan_ip"),
-                "pir_status": cam_status.get("PIR_Status"),
-                "motion": cam_status.get("Motion_Trigger"),
-                "seconds_last_trigger": cam_status.get("Seconds_Last_Trigger"),
-                "last_alarm_time": cam_status.get("last_alarm_time"),
-                "last_alarm_pic": cam_status.get("last_alarm_pic"),
-                "alarm_name": cam_status.get("last_alarm_type_name"),
-                "ssid": wifi_info.get("ssid"),
-                "signal": wifi_info.get("signal"),
-                "local_ip": cam_status.get("local_ip") or wifi_info.get("address"),
-                "local_rtsp_port": cam_status.get("local_rtsp_port") or "554",
-            }
-
-        except (KeyError, AttributeError, ValueError, Exception) as exc:
-            _LOGGER.warning("Failed to get device status for %s: %s", serial, exc)
-            return {}
+        return {
+            "name": cam_status.get("name"),
+            "version": cam_status.get("version"),
+            "upgrade_available": cam_status.get("upgrade_available"),
+            "status": cam_status.get("status"),
+            "wan_ip": cam_status.get("wan_ip"),
+            "pir_status": cam_status.get("PIR_Status"),
+            "motion": cam_status.get("Motion_Trigger"),
+            "seconds_last_trigger": cam_status.get("Seconds_Last_Trigger"),
+            "last_alarm_time": cam_status.get("last_alarm_time"),
+            "last_alarm_pic": cam_status.get("last_alarm_pic"),
+            "alarm_name": cam_status.get("last_alarm_type_name"),
+            "ssid": wifi_info.get("ssid"),
+            "signal": wifi_info.get("signal"),
+            "local_ip": cam_status.get("local_ip") or wifi_info.get("address"),
+            "local_rtsp_port": cam_status.get("local_rtsp_port") or "554",
+        }

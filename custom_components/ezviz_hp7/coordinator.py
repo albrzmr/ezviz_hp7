@@ -5,7 +5,10 @@ import logging
 from datetime import timedelta
 from typing import Any, TYPE_CHECKING
 
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import (
+    DataUpdateCoordinator,
+    UpdateFailed,
+)
 
 from .const import UPDATE_INTERVAL_SEC
 
@@ -48,9 +51,17 @@ class Hp7Coordinator(DataUpdateCoordinator):
         self._stats = stats
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Fetch latest device status from the API on every tick."""
+        """Fetch latest device status from the API on every tick.
+
+        Wraps any failure in ``UpdateFailed`` so HA can apply its usual
+        backoff + ``unavailable`` semantics rather than us silently
+        returning an empty dict and leaving entities with stale values.
+        """
         if self._stats is not None:
             self._stats.cloud_polls += 1
-        return await self.hass.async_add_executor_job(
-            self.api.get_status, self.serial
-        )
+        try:
+            return await self.hass.async_add_executor_job(
+                self.api.get_status, self.serial,
+            )
+        except Exception as exc:  # noqa: BLE001 — pyezvizapi raises various types
+            raise UpdateFailed(f"EZVIZ HP7 poll failed: {exc}") from exc

@@ -173,6 +173,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
+def _to_bool_loose(value: Any) -> bool:
+    """Permissive truthy parsing — same shape as ``binary_sensor._to_bool``.
+
+    ``api.get_status`` may return any of {``True``, ``1``, ``"1"``,
+    ``"true"``, ``"on"``, ``"yes"``, ``False``, ``0``, ``"0"``, ``None``}
+    for the motion field depending on firmware version, so we coerce
+    leniently before comparing transitions.
+    """
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "on", "yes", "y")
+    return False
+
+
 def _install_event_prewarm(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -196,7 +215,8 @@ def _install_event_prewarm(
     @callback
     def _on_update() -> None:
         data = coordinator.data or {}
-        motion_now = bool(data.get("Motion_Trigger"))
+        # ``api.get_status`` re-keys ``Motion_Trigger`` → ``motion``.
+        motion_now = _to_bool_loose(data.get("motion"))
         alarm_time_now = data.get("last_alarm_time")
         alarm_name_now = data.get("alarm_name")
 
