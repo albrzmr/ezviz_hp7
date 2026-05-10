@@ -23,13 +23,6 @@
         "data": {
           "serial": "Numéro de série"
         }
-      },
-      "camera_password": {
-        "title": "Mot de passe de la caméra",
-        "description": "Entrez le mot de passe admin de la caméra {serial} pour le streaming LAN. Laissez vide pour détection automatique.",
-        "data": {
-          "camera_password": "Mot de passe de la caméra"
-        }
       }
     },
     "error": {
@@ -67,13 +60,6 @@
       "wan_ip": {
         "name": "IP publique"
       },
-      "motion": {
-        "name": "Mouvement",
-        "state": {
-          "detected": "Détecté",
-          "none": "Aucun"
-        }
-      },
       "last_alarm_time": {
         "name": "Dernière alarme"
       },
@@ -92,9 +78,6 @@
       }
     },
     "binary_sensor": {
-      "motion_trigger": {
-        "name": "Détection de Mouvement"
-      },
       "smart_detection_alarm": {
         "name": "Alarme de Détection Intelligente"
       },

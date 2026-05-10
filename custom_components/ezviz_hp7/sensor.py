@@ -56,16 +56,14 @@ SENSORS: list[
     ("ssid", "ssid", None, None, "mdi:wifi", None),
     ("local_ip", "local_ip", None, None, "mdi:ip", None),
     ("wan_ip", "wan_ip", None, None, "mdi:wan", None),
-    # Motion
-    (
-        "motion",
-        "motion",
-        None,
-        None,
-        "mdi:run",
-        lambda v: "detected" if v in (1, "1", True, "true") else "none",
-    ),
-    # Last events / diagnostics
+    # NOTE: the upstream "motion" sensor used to be here but was always
+    # ``"none"`` on HP7 / CP7 — the firmware never populates the
+    # ``Motion_Trigger`` field that backs it (verified empirically over
+    # 240+ polls).  Use ``binary_sensor.smart_detection_alarm`` /
+    # ``binary_sensor.intelligent_detection_alarm`` /
+    # ``binary_sensor.doorbell_ringing`` instead, which pulse for
+    # ``PULSE_SECONDS`` whenever a fresh cloud alarm arrives.
+    # ── Last events / diagnostics ────────────────────────────────────
     (
         "last_alarm_time",
         "last_alarm_time",

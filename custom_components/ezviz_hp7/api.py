@@ -6,10 +6,10 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
-from .pylocalapi.camera import EzvizCamera
-from .pylocalapi.cas import EzvizCAS
-from .pylocalapi.client import EzvizClient
-from .pylocalapi.exceptions import (
+from pyezvizapi.camera import EzvizCamera
+from pyezvizapi.cas import EzvizCAS
+from pyezvizapi.client import EzvizClient
+from pyezvizapi.exceptions import (
     EzvizAuthTokenExpired,
     EzvizAuthVerificationCode,
     HTTPError,
@@ -489,8 +489,12 @@ class Hp7Api:
             "upgrade_available": cam_status.get("upgrade_available"),
             "status": cam_status.get("status"),
             "wan_ip": cam_status.get("wan_ip"),
-            "pir_status": cam_status.get("PIR_Status"),
-            "motion": cam_status.get("Motion_Trigger"),
+            # ``PIR_Status`` and ``Motion_Trigger`` aren't populated by
+            # the HP7 / CP7 firmware (verified across hundreds of
+            # polls) — no entity reads them, so we don't pretend to
+            # expose them.  Motion / presence detection is signalled
+            # via the cloud alarm timeline (``last_alarm_time`` plus
+            # ``alarm_name``) which the binary sensors use.
             "seconds_last_trigger": cam_status.get("Seconds_Last_Trigger"),
             "last_alarm_time": cam_status.get("last_alarm_time"),
             "last_alarm_pic": cam_status.get("last_alarm_pic"),

@@ -2,42 +2,36 @@
   "config": {
     "step": {
       "user": {
-        "title": "Collega EZVIZ HP7",
-        "description": "Inserisci le credenziali EZVIZ e la regione.",
+        "title": "Connect EZVIZ HP7 / CP7",
+        "description": "Enter your EZVIZ account credentials and region.",
         "data": {
-          "username": "Nome utente",
+          "username": "Username",
           "password": "Password",
-          "region": "Regione"
+          "region": "Region"
         }
       },
       "pick_serial": {
-        "title": "Seleziona dispositivo",
-        "description": "Scegli il serial del tuo HP7.",
+        "title": "Select device",
+        "description": "Choose the doorbell serial.",
         "data": {
-          "serial": "Numero di serie"
+          "serial": "Serial number"
         }
       },
       "enter_serial": {
-        "title": "Inserisci numero di serie",
-        "description": "Inserisci manualmente il numero di serie del tuo HP7.",
+        "title": "Enter serial number",
+        "description": "Manually enter the serial number of your doorbell.",
         "data": {
-          "serial": "Numero di serie"
-        }
-      },
-      "camera_password": {
-        "title": "Password videocamera",
-        "description": "Inserisci la password admin della videocamera {serial} per lo streaming LAN. Lasciare vuoto per rilevamento automatico.",
-        "data": {
-          "camera_password": "Password videocamera"
+          "serial": "Serial number"
         }
       }
     },
     "error": {
-      "auth": "Login fallito. Controlla credenziali/region."
+      "auth": "Login failed. Check credentials / region.",
+      "cannot_connect": "Cannot reach EZVIZ servers right now."
     },
     "abort": {
-      "no_devices": "Nessun dispositivo trovato nell'account.",
-      "already_configured": "Dispositivo già configurato"
+      "no_devices": "No devices found in this account.",
+      "already_configured": "This device is already configured."
     }
   },
   "options": {
@@ -54,57 +48,43 @@
   "entity": {
     "sensor": {
       "name": {
-        "name": "Nome Dispositivo"
+        "name": "Device name"
       },
       "version": {
         "name": "Firmware"
       },
       "status": {
-        "name": "Stato",
+        "name": "Status",
         "state": {
           "online": "online",
           "offline": "offline"
         }
       },
       "signal": {
-        "name": "WiFi Segnale"
+        "name": "WiFi signal"
       },
       "ssid": {
-        "name": "SSID WiFi"
+        "name": "WiFi SSID"
       },
       "local_ip": {
-        "name": "IP Locale"
+        "name": "Local IP"
       },
       "wan_ip": {
-        "name": "IP WAN"
-      },
-      "pir_status": {
-        "name": "PIR Movimento",
-        "state": {
-          "active": "attivo",
-          "inactive": "inattivo"
-        }
-      },
-      "motion": {
-        "name": "Movimento",
-        "state": {
-          "detected": "rilevato",
-          "none": "nessuno"
-        }
+        "name": "WAN IP"
       },
       "last_alarm_time": {
-        "name": "Ultimo Allarme"
+        "name": "Last alarm"
       },
       "alarm_name": {
-        "name": "Tipo Allarme"
+        "name": "Alarm type"
       },
       "seconds_last_trigger": {
-        "name": "Secondi Ultimo Movimento"
+        "name": "Seconds since last trigger"
       },
       "upgrade_available": {
-        "name": "Aggiornamento Disponibile",
+        "name": "Update available",
         "state": {
-          "yes": "sì",
+          "yes": "yes",
           "no": "no"
         }
       }
@@ -120,31 +100,31 @@
     },
     "button": {
       "unlock_gate": {
-        "name": "Sblocca Cancello"
+        "name": "Unlock gate"
       },
       "unlock_door": {
-        "name": "Sblocca Porta"
+        "name": "Unlock door"
       }
     }
   },
   "services": {
     "unlock_gate": {
-      "name": "Sblocca cancello",
-      "description": "Sblocca il cancello via cloud EZVIZ.",
+      "name": "Unlock gate",
+      "description": "Unlock the gate via the EZVIZ cloud.",
       "fields": {
         "serial": {
-          "name": "Numero di serie",
-          "description": "Numero di serie del dispositivo"
+          "name": "Serial number",
+          "description": "Device serial number."
         }
       }
     },
     "unlock_door": {
-      "name": "Sblocca porta",
-      "description": "Sblocca la porta via cloud EZVIZ.",
+      "name": "Unlock door",
+      "description": "Unlock the door via the EZVIZ cloud.",
       "fields": {
         "serial": {
-          "name": "Numero di serie",
-          "description": "Numero di serie del dispositivo"
+          "name": "Serial number",
+          "description": "Device serial number."
         }
       }
     }

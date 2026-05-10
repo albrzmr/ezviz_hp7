@@ -26,10 +26,9 @@ classifiers = [
 line-length = 88
 target-version = "py311"
 extend-exclude = [
-    # Vendored 3rd-party (pyezvizapi) — reformatted upstream, do not lint.
-    "custom_components/ezviz_hp7/pylocalapi",
     # Research-vendored crypto / wire protocol code — formatted to
-    # match the ``docs/cpd7-stream-recipe`` source of truth.
+    # match the ``docs/cpd7-stream-recipe`` source of truth in the
+    # private research repo.
     "custom_components/ezviz_hp7/cpd7",
 ]
 
