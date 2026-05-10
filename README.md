@@ -189,6 +189,20 @@ firmware versions all useful.
 - Original integration: [@Bobsilvio](https://github.com/Bobsilvio/ezviz_hp7).
 - Cloud API helpers: [pyEzvizApi](https://github.com/RenierM26/pyEzvizApi)
   by RenierM26.
+- This fork is maintained by [@albrzmr](https://github.com/albrzmr).
+
+---
+
+## Support
+
+If this fork is useful to you, you can buy me a coffee:
+
+[![Support albrzmr on Ko-fi](https://img.shields.io/badge/Ko--fi-Buy_albrzmr_a_coffee-FF5E5B?logo=ko-fi&logoColor=white&style=for-the-badge)](https://ko-fi.com/albrzmr)
+
+This fork stands on the work of the original creator — please consider
+supporting them too if you appreciate the foundation they built:
+
+[![Support silviosmart on Ko-fi](https://img.shields.io/badge/Ko--fi-Buy_silviosmart_a_coffee_(original_creator)-29ABE0?logo=ko-fi&logoColor=white)](https://ko-fi.com/silviosmart)
 
 ---
 
