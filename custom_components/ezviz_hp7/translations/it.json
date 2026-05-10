@@ -23,13 +23,6 @@
         "data": {
           "serial": "Numero di serie"
         }
-      },
-      "camera_password": {
-        "title": "Password videocamera",
-        "description": "Inserisci la password admin della videocamera {serial} per lo streaming LAN. Lasciare vuoto per rilevamento automatico.",
-        "data": {
-          "camera_password": "Password videocamera"
-        }
       }
     },
     "error": {
@@ -67,13 +60,6 @@
       "wan_ip": {
         "name": "IP WAN"
       },
-      "motion": {
-        "name": "Movimento",
-        "state": {
-          "detected": "rilevato",
-          "none": "nessuno"
-        }
-      },
       "last_alarm_time": {
         "name": "Ultimo Allarme"
       },
@@ -92,9 +78,6 @@
       }
     },
     "binary_sensor": {
-      "motion_trigger": {
-        "name": "Rilevamento Movimento"
-      },
       "smart_detection_alarm": {
         "name": "Allarme Rilevamento Intelligente"
       },

@@ -1,20 +1,17 @@
 {
   "domain": "ezviz_hp7",
   "name": "EZVIZ HP7 / CP7",
-  "codeowners": ["@Bobsilvio"],
+  "codeowners": ["@albrzmr", "@Bobsilvio"],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/Bobsilvio/ezviz_hp7/",
+  "documentation": "https://github.com/albrzmr/ezviz_hp7/",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/Bobsilvio/ezviz_hp7/issues",
-  "loggers": ["ezviz"],
+  "issue_tracker": "https://github.com/albrzmr/ezviz_hp7/issues",
+  "loggers": ["ezviz_hp7", "pyezvizapi"],
   "requirements": [
-    "pycryptodome",
+    "pyezvizapi==1.0.4.9",
     "cryptography",
-    "pandas",
-    "requests",
-    "paho-mqtt",
-    "xmltodict"
+    "pycryptodome"
   ],
-  "version": "0.7.3"
+  "version": "0.8.0"
 }
