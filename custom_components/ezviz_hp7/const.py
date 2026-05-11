@@ -35,3 +35,9 @@ MJPEG_DEFAULT_FPS = 8
 MJPEG_DEFAULT_WIDTH = 1280
 MJPEG_DEFAULT_HEIGHT = 720
 MJPEG_DEFAULT_QUALITY = 5  # ffmpeg -q:v scale (2 best, 31 worst)
+
+# ── Cloud HTTP identity ──────────────────────────────────────────────
+# User-Agent sent on cloud snapshot fetches.  EZVIZ's CDN expects a
+# branded UA; using the official app's prefix avoids 403s from anti-
+# scraper rules without pretending to be a specific app version.
+CLOUD_USER_AGENT = "EZVIZ/5.0"

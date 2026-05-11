@@ -27,6 +27,10 @@ _LOGGER = logging.getLogger(__name__)
 
 ALARM_FIELD = "alarm_name"
 ALARM_TIME_FIELD = "last_alarm_time"
+# How long alarm binary sensors stay ON after a fresh cloud event
+# before auto-resetting.  Long enough for HA automations to fire on
+# the rising edge, short enough that the dashboard doesn't show
+# "alarm active" lingering long after the event ended.
 PULSE_SECONDS = 3
 
 # Simple binary sensors mapped directly to coordinator data keys.

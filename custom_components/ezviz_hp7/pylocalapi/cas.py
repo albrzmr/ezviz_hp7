@@ -67,6 +67,12 @@ CAS_TAIL_SIZE = 32
 # Fixed IV for QueryPermanentPassword inner encryption (from libezstreamclient)
 AES_IV_INNER = b"01234567" + b"\x00" * 8
 
+# Indexes into ``token['service_urls']['sysConf']`` — the EZVIZ cloud
+# returns this fixed-position list and we pluck the CAS host / port
+# out of it.  Layout is dictated by EZVIZ, not us.
+_SYSCONF_CAS_HOST_IDX = 15
+_SYSCONF_CAS_PORT_IDX = 16
+
 
 # ── CAS packet helpers ──────────────────────────────────────────────────
 
@@ -228,8 +234,8 @@ class EzvizCAS:
 
     def _get_cas_host_port(self) -> tuple[str, int]:
         """Return (host, port) for the CAS server from service_urls."""
-        host = cast("str", self._service_urls["sysConf"][15])
-        port = cast("int", self._service_urls["sysConf"][16])
+        host = cast("str", self._service_urls["sysConf"][_SYSCONF_CAS_HOST_IDX])
+        port = cast("int", self._service_urls["sysConf"][_SYSCONF_CAS_PORT_IDX])
         return host, port
 
     def _send_and_recv(
