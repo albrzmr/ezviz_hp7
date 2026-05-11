@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import random
+import re
 import socket
 import ssl
 import struct
@@ -382,8 +383,6 @@ class EzvizCAS:
         _LOGGER.debug("CAS inner response: %s", inner_text)
 
         # Parse XML response
-        import re
-
         m = re.search(r"<Result>(\d+)</Result>", inner_text)
         if not m or m.group(1) != "0":
             raise PyEzvizError(f"QueryPermanentPassword failed: {inner_text}")

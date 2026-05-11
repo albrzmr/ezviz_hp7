@@ -12,6 +12,7 @@ See docs/cpd7-stream-recipe/07-CRYPTO-INTERNALS.md for the full algorithm.
 
 import base64
 import struct
+from typing import Any, Dict, Optional
 
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization
@@ -66,7 +67,6 @@ HEADER_FIXED = 0x86        # end of fixed header area
 TRAILER_SIZE = 4 + 4 + 32  # 40 bytes
 
 
-from typing import Optional, Dict, Any
 def parse_ecdh_packet(data: bytes) -> Optional[Dict[str, Any]]:
     """Parse a '$'-prefixed ECDH packet.
 

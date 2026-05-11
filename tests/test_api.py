@@ -155,8 +155,9 @@ def test_login_and_store_raises_value_error_on_auth_failure(patched_api) -> None
 # ── login() smoke ──────────────────────────────────────────────────
 
 
-def test_login_returns_true(patched_api) -> None:
-    assert patched_api.login() is True
+def test_login_succeeds_without_returning_value(patched_api) -> None:
+    # ``login()`` is a thin wrapper around ``ensure_client``; smoke check only.
+    assert patched_api.login() is None
 
 
 # ── detect_capabilities ────────────────────────────────────────────

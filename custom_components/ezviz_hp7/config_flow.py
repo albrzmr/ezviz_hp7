@@ -112,9 +112,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call
                 user_input[CONF_REGION],
                 feature_code=user_input[CONF_FEATURE_CODE],
             )
-            ok = await self.hass.async_add_executor_job(api.login)
-            if not ok:
-                raise ValueError("Login returned False")
+            await self.hass.async_add_executor_job(api.login)
 
             # Store token for later use
             if api.token:
