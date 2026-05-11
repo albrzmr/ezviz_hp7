@@ -123,6 +123,4 @@ async def test_select_option_updates_entry_options_when_changed() -> None:
 async def test_select_option_logs_change(caplog) -> None:
     s = _select(_entry(options={CONF_LIVE_VIEW_MODE: LIVE_VIEW_MJPEG}))
     await s.async_select_option(LIVE_VIEW_HLS)
-    assert any(
-        "live view mode changed to hls" in r.message for r in caplog.records
-    )
+    assert any("live view mode changed to hls" in r.message for r in caplog.records)

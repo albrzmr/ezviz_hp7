@@ -26,7 +26,6 @@ from custom_components.ezviz_hp7.sensor import (
     async_setup_entry,
 )
 
-
 # ── _dig ────────────────────────────────────────────────────────────
 
 

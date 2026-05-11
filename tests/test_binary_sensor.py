@@ -33,7 +33,6 @@ from custom_components.ezviz_hp7.binary_sensor import (
 )
 from custom_components.ezviz_hp7.const import DOMAIN
 
-
 # ── _to_bool ────────────────────────────────────────────────────────
 
 
@@ -99,9 +98,7 @@ def test_hp7_binary_simple_unique_id_includes_domain_and_key() -> None:
 
 
 @pytest.mark.parametrize("raw, expected", [(1, True), (0, False), (None, False)])
-def test_hp7_binary_simple_is_on_round_trips_to_bool(
-    raw: Any, expected: bool
-) -> None:
+def test_hp7_binary_simple_is_on_round_trips_to_bool(raw: Any, expected: bool) -> None:
     assert _simple("foo", {"foo": raw}).is_on is expected
 
 
