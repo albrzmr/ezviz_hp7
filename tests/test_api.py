@@ -437,66 +437,7 @@ def test_unlock_gate_uses_lock_no_1(patched_api) -> None:
     )
 
 
-# ── get_status ─────────────────────────────────────────────────────
-
-
-def test_get_status_raises_when_client_uninitialised(monkeypatch) -> None:
-    """``ensure_client`` succeeds without raising but doesn't set
-    ``_client`` → ``get_status`` must complain loudly.
-    """
-    api = Hp7Api(username="u")
-    monkeypatch.setattr(api, "ensure_client", lambda: None)
-    # ensure_client is a no-op stub above so _client stays None
-    with pytest.raises(RuntimeError, match="cloud client not initialised"):
-        api.get_status("SER")
-
-
-def test_get_status_maps_all_fields(patched_api, cam_status) -> None:
-    raw = {
-        "name": cam_status["name"],
-        "version": cam_status["version"],
-        "upgrade_available": cam_status["upgrade_available"],
-        "status": cam_status["status"],
-        "wan_ip": cam_status["wan_ip"],
-        "Seconds_Last_Trigger": cam_status["seconds_last_trigger"],
-        "last_alarm_time": cam_status["last_alarm_time"],
-        "last_alarm_pic": cam_status["last_alarm_pic"],
-        "last_alarm_type_name": cam_status["alarm_name"],
-        "WIFI": {
-            "ssid": cam_status["ssid"],
-            "signal": cam_status["signal"],
-            "address": "WIFI-IP",  # used as fallback when local_ip missing
-        },
-        "local_ip": cam_status["local_ip"],
-        "local_rtsp_port": cam_status["local_rtsp_port"],
-    }
-    api_mod.EzvizCamera.return_value.status.return_value = raw
-    out = patched_api.get_status("SER")
-    for key, expected in cam_status.items():
-        assert out[key] == expected, key
-
-
-def test_get_status_local_rtsp_port_defaults_to_554(patched_api) -> None:
-    api_mod.EzvizCamera.return_value.status.return_value = {
-        "name": "D",
-        "WIFI": {},
-        "local_rtsp_port": None,
-    }
-    out = patched_api.get_status("SER")
-    assert out["local_rtsp_port"] == "554"
-
-
-def test_get_status_local_ip_falls_back_to_wifi_address(patched_api) -> None:
-    api_mod.EzvizCamera.return_value.status.return_value = {
-        "name": "D",
-        "local_ip": None,
-        "WIFI": {"address": "10.0.0.5"},
-    }
-    out = patched_api.get_status("SER")
-    assert out["local_ip"] == "10.0.0.5"
-
-
-# ── get_static_status (phase 6.1 split) ───────────────────────────
+# ── get_static_status ─────────────────────────────────────────────
 
 
 def _set_static_status_payload(payload: dict) -> None:
@@ -677,45 +618,6 @@ def test_get_alarms_creates_camera_with_empty_device_obj(patched_api) -> None:
     args, kwargs = api_mod.EzvizCamera.call_args
     assert args == (patched_api._client, "SER")
     assert kwargs == {"device_obj": {}}
-
-
-# ── get_status compat (calls both halves) ─────────────────────────
-
-
-def test_get_status_calls_both_halves(patched_api) -> None:
-    _set_alarms_payload(
-        {
-            "name": "Doorbell",
-            "version": "V5",
-            "upgrade_available": False,
-            "status": 1,
-            "wan_ip": "203.0.113.1",
-            "WIFI": {"ssid": "X", "signal": 50, "address": "192.0.2.10"},
-            "local_ip": "192.0.2.10",
-            "local_rtsp_port": "554",
-            "Seconds_Last_Trigger": 1,
-            "last_alarm_time": "2026-05-11 10:00:00",
-            "last_alarm_pic": "https://x/snap.jpg",
-            "last_alarm_type_name": "Ring",
-        }
-    )
-    _set_messages_response([{"deviceSerial": "SER", "title": "Ring"}])
-    out = patched_api.get_status("SER")
-    # Both endpoints reached.
-    patched_api._client.get_device_infos.assert_called_once_with("SER")
-    patched_api._client.get_device_messages_list.assert_called_once()
-    # Merged output carries both static and alarm fields.
-    assert set(out.keys()) >= {
-        "name",
-        "version",
-        "status",
-        "ssid",
-        "local_ip",
-        "last_alarm_time",
-        "last_alarm_pic",
-        "alarm_name",
-        "seconds_last_trigger",
-    }
 
 
 # ── close ──────────────────────────────────────────────────────────

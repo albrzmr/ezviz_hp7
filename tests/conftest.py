@@ -119,7 +119,7 @@ def mock_config_entry(fake_token: dict) -> Any:
 
 @pytest.fixture
 def cam_status() -> dict:
-    """Shape of the dict ``Hp7Api.get_status`` returns."""
+    """Merged shape of ``Hp7Api.get_static_status`` + ``get_alarms``."""
     return {
         "name": "Doorbell",
         "version": "V5.3.6 build 250825",
