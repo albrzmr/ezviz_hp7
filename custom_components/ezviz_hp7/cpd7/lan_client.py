@@ -38,6 +38,15 @@ MD5_TRAILER_LEN = 32
 MAGIC = b"\x9e\xba\xac\xe9"
 AES_IV = b"01234567" + b"\x00" * 8
 
+# Placeholder OperationCode the official EZVIZ app sends on the wire —
+# the firmware validates length, not content.  Use the same string so
+# captured traffic looks identical.
+PLACEHOLDER_OP_CODE = "ABCDEFG"
+
+# Session ID for the cmd 0x2013 INIT request.  The firmware accepts
+# any value; this matches what the official app uses.
+INIT_SESSION_ID = 10011
+
 
 def _encrypt(key: bytes, plaintext: bytes) -> bytes:
     return AES.new(key, AES.MODE_CBC, AES_IV).encrypt(pad(plaintext, AES.block_size))
@@ -110,12 +119,12 @@ def _discover_local_ip(host: str) -> str:
 
 def _xml_init(session: int) -> bytes:
     return (
-        b'<?xml version="1.0" encoding="utf-8"?>\n'
-        b"<Request>\n"
-        b"\t<OperationCode>ABCDEFG</OperationCode>\n"
-        b"\t<Session>" + str(session).encode("ascii") + b"</Session>\n"
-        b"</Request>\n"
-    )
+        f'<?xml version="1.0" encoding="utf-8"?>\n'
+        f"<Request>\n"
+        f"\t<OperationCode>{PLACEHOLDER_OP_CODE}</OperationCode>\n"
+        f"\t<Session>{session}</Session>\n"
+        f"</Request>\n"
+    ).encode("utf-8")
 
 
 def _xml_invite(
@@ -129,7 +138,7 @@ def _xml_invite(
     return (
         f'<?xml version="1.0" encoding="utf-8"?>\n'
         f"<Request>\n"
-        f"\t<OperationCode>ABCDEFG</OperationCode>\n"
+        f"\t<OperationCode>{PLACEHOLDER_OP_CODE}</OperationCode>\n"
         f'\t<Channel RelatedDevice="{related_device}">{channel}</Channel>\n'
         f'\t<ReceiverInfo Address="{receiver_addr}" Port="{receiver_port}" '
         f'ServerType="1" StreamType="MAIN" NewStreamType="1" TransProto="TCP" />\n'
@@ -233,7 +242,7 @@ class Cpd7LanClient:
             (self._host, PORT_CTRL), timeout=self._connect_timeout
         )
         try:
-            self._send_cmd(sock_ctrl, 1, CMD_INIT, _xml_init(10011), "INIT")
+            self._send_cmd(sock_ctrl, 1, CMD_INIT, _xml_init(INIT_SESSION_ID), "INIT")
         finally:
             sock_ctrl.close()
 

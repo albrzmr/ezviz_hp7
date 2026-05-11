@@ -28,6 +28,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    CLOUD_USER_AGENT,
     DEFAULT_LIVE_VIEW_MODE,
     DOMAIN,
     LIVE_VIEW_HLS,
@@ -209,7 +210,7 @@ class Hp7Camera(Camera, CoordinatorEntity):
                 return None
 
             session: ClientSession = async_get_clientsession(self.hass)
-            headers: dict[str, str] = {"User-Agent": "EZVIZ/5.0"}
+            headers: dict[str, str] = {"User-Agent": CLOUD_USER_AGENT}
             access_token = token.get("access_token")
             if access_token:
                 headers["Authorization"] = f"Bearer {access_token}"
