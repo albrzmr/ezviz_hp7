@@ -504,15 +504,15 @@ class Hp7Api:
         """
         return self._try_unlock(serial, DEFAULT_GATE_LOCK_NO)
 
-    # ── Status / alarm polls (split for cadence — phase 6.1) ──────────
+    # ── Status / alarm polls (split for cadence) ──────────────────────
     #
-    # Originally a single ``get_status`` did pagelist + unifiedmsg/list
-    # on every coordinator tick (≈11 k cloud hits per day at 15 s).
-    # The two endpoints carry data with very different volatility, so
-    # ``coordinator.py`` now schedules them independently — alarms at
-    # the fast tick rate, the static pagelist every few minutes.  The
-    # legacy merged ``get_status`` is preserved as a thin alias for
-    # tests and any external caller.
+    # The HP7 / CP7 cloud exposes two relevant endpoints: ``pagelist``
+    # (slow-moving device info) and ``unifiedmsg/list`` (alarm
+    # timeline).  The coordinator polls them at independent cadences
+    # — alarms every tick, pagelist every few minutes — so we expose
+    # one method per endpoint instead of bundling them into a single
+    # merged ``get_status`` (the original shape).  That historical
+    # alias has been removed; new code must call one of the two.
 
     def get_static_status(self, serial: str) -> dict[str, Any]:
         """Slow poll: pagelist-derived device info (no alarm fetch).
@@ -587,18 +587,3 @@ class Hp7Api:
             "last_alarm_pic": cam_status.get("last_alarm_pic"),
             "alarm_name": cam_status.get("last_alarm_type_name"),
         }
-
-    def get_status(self, serial: str) -> dict[str, Any]:
-        """Legacy combined poll — kept for backwards compatibility.
-
-        Equivalent to merging ``get_static_status`` and ``get_alarms``.
-        New code should call them separately at their respective
-        cadences (the coordinator owns the split scheduling).
-
-        Propagates any error from the underlying cloud calls so the
-        coordinator can wrap it in ``UpdateFailed`` and HA marks
-        entities ``unavailable`` correctly.
-        """
-        static = self.get_static_status(serial)
-        alarms = self.get_alarms(serial)
-        return {**static, **alarms}
