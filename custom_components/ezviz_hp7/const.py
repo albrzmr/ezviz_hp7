@@ -13,16 +13,24 @@ CONF_FEATURE_CODE = "feature_code"
 # Platforms to set up
 PLATFORMS = ["button", "sensor", "binary_sensor", "camera", "select"]
 
-# Poll interval in seconds.  Each tick triggers ~2 cloud calls
-# (``pagelist`` + ``unifiedmsg/list``), so this directly controls the
-# integration's footprint on the EZVIZ servers.  The previous value of
-# 2 s meant ~3,600 calls per hour per device, which is high enough to
-# attract rate-limiting / abuse-detection on the EZVIZ side.  At 15 s
-# we still pick up doorbell ring / motion events within a second or
-# two on average (cloud lags ~3 s anyway), but generate ~12x fewer
-# requests.  Considered exposing this in the options flow but the
-# default is fine for the typical home doorbell case.
+# Coordinator tick interval, in seconds.  Each tick fetches the
+# alarm timeline (``unifiedmsg/list``) — that's the latency-sensitive
+# half: a slower tick means a slower doorbell-ring notification.
+# 15 s gives ~3 s worst-case extra latency on top of the cloud's own
+# ~3 s lag, while keeping us comfortably under the EZVIZ
+# rate-limit / abuse-detection threshold.  (Earlier 2 s default
+# produced ~3 600 hits/hour/device and got the test account flagged
+# once.)
 UPDATE_INTERVAL_SEC = 15
+
+# How often, in seconds, the coordinator also refreshes the static
+# device info from ``pagelist`` (firmware version, WiFi signal,
+# IPs…).  Those fields change on the timescale of minutes to days,
+# so polling them every tick was wasted bandwidth — the coordinator
+# now reuses a cached copy between refreshes.  300 s ≈ 5 min keeps
+# the dashboard fresh without making the static endpoint dominate
+# our cloud footprint.
+STATUS_POLL_INTERVAL_SEC = 300
 
 # ── Live view mode (options flow) ────────────────────────────────────
 CONF_LIVE_VIEW_MODE = "live_view_mode"

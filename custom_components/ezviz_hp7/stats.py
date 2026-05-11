@@ -33,7 +33,15 @@ class ActivityStats:
     # ── Cloud / EUCAS ─────────────────────────────────────────────────
     cloud_logins: int = 0  # initial logins (no cached token)
     cloud_relogins: int = 0  # forced re-logins after a CAS error
-    cloud_polls: int = 0  # coordinator updates (≈ pyezvizapi calls)
+    cloud_polls: int = 0  # coordinator ticks (1 per UPDATE_INTERVAL_SEC)
+    # Phase 6.2 split: the coordinator hits two cloud endpoints at
+    # different cadences.  ``cloud_polls_alarms`` increments every
+    # tick (alarms must be fast), ``cloud_polls_static`` only every
+    # ``STATUS_POLL_INTERVAL_SEC``.  The ratio reflects the actual
+    # HTTP footprint; ``cloud_polls`` stays as the tick counter for
+    # backwards-compat with prior log scraping.
+    cloud_polls_alarms: int = 0
+    cloud_polls_static: int = 0
 
     aes_cache_hits: int = 0  # ``fetch_lan_aes_key`` served from cache
     aes_cache_misses: int = 0  # ``fetch_lan_aes_key`` had to call EUCAS
