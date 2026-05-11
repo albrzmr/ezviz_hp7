@@ -512,6 +512,8 @@ async def test_handle_client_attaches_to_warm_session_and_flushes_burst(
     pump = asyncio.create_task(asyncio.sleep(60))
     r._pump_task = pump
     r._buffer.extend(b"\xab" * 8 + _MPEG_PS_PACK + b"prefix" + _HEVC_VPS_4B + b"frame")
+    # Buffer already has a keyframe, the gate must not delay the test.
+    r._keyframe_seen.set()
     stats = MagicMock(relay_clients_attached=0, relay_clients_attached_warm=0)
     r._stats = stats
 
@@ -538,6 +540,11 @@ async def test_handle_client_attaches_to_warm_session_and_flushes_burst(
 async def test_handle_client_spins_up_upstream_when_cold(mocker) -> None:
     r = _relay()
     mocker.patch.object(r, "_spin_up_upstream", AsyncMock())
+    # The spin_up mock doesn't actually run a pump → the keyframe event
+    # would never fire on its own.  Pre-set it so the test doesn't burn
+    # the full ``_KEYFRAME_WAIT_TIMEOUT_SEC`` (covered separately by
+    # ``test_handle_client_attaches_after_keyframe_timeout``).
+    r._keyframe_seen.set()
     writer = MagicMock()
     writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 50002))
     writer.drain = AsyncMock()
@@ -582,3 +589,176 @@ async def test_wait_for_client_eof_handles_reset() -> None:
             raise ConnectionResetError()
 
     await CpdMpegPsRelay._wait_for_client_eof(_Reset())
+
+
+# ── keyframe gate (HEVC VPS detection) ────────────────────────────
+
+
+def test_keyframe_event_is_initially_unset() -> None:
+    assert _relay()._keyframe_seen.is_set() is False
+
+
+async def test_pump_sets_keyframe_event_when_vps_4b_seen() -> None:
+    r = _relay()
+    r._lan = _FakeLan([b"prefix-bytes-no-vps" + _HEVC_VPS_4B + b"after"])
+    r._decoder = _FakeDecoder()
+    await r._pump_upstream()
+    assert r._keyframe_seen.is_set() is True
+
+
+async def test_pump_sets_keyframe_event_when_vps_3b_seen() -> None:
+    r = _relay()
+    r._lan = _FakeLan([b"prefix" + _HEVC_VPS_3B + b"after"])
+    r._decoder = _FakeDecoder()
+    await r._pump_upstream()
+    assert r._keyframe_seen.is_set() is True
+
+
+async def test_pump_leaves_keyframe_event_clear_when_no_vps() -> None:
+    r = _relay()
+    r._lan = _FakeLan([b"only-deltas-no-vps-here"])
+    r._decoder = _FakeDecoder()
+    await r._pump_upstream()
+    assert r._keyframe_seen.is_set() is False
+
+
+async def test_teardown_clears_keyframe_event() -> None:
+    r = _relay()
+    r._keyframe_seen.set()
+    r._lan = MagicMock()
+    r._decoder = MagicMock()
+    r._pump_task = asyncio.create_task(asyncio.sleep(60))
+    await r._teardown_upstream()
+    assert r._keyframe_seen.is_set() is False
+
+
+async def test_handle_client_waits_for_keyframe_when_burst_empty() -> None:
+    """Cold-attach with empty buffer: the gate must defer the writer
+    attach until the pump signals a keyframe."""
+    r = _relay()
+    pump = asyncio.create_task(asyncio.sleep(60))
+    r._pump_task = pump  # warm session, but buffer is empty
+    # Event is initially unset → first attach attempt will wait.
+
+    writer = MagicMock()
+    writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 50050))
+    writer.drain = AsyncMock()
+    writer.wait_closed = AsyncMock()
+
+    async def _trip_event_then_eof() -> None:
+        # Simulate the pump task surfacing a keyframe a moment later.
+        await asyncio.sleep(0.01)
+        r._buffer.extend(_MPEG_PS_PACK + b"prefix" + _HEVC_VPS_4B + b"frame")
+        r._keyframe_seen.set()
+
+    helper = asyncio.create_task(_trip_event_then_eof())
+    try:
+        await r._handle_client(_EofReader(), writer)
+    finally:
+        r._cancel_close()
+        await _cancel_task(pump)
+        await _cancel_task(helper)
+
+    # The viewer received the keyframe-aligned burst (the event tripped
+    # in time, so the snapshot picked up the just-arrived bytes).
+    writer.write.assert_called_once()
+    payload = writer.write.call_args.args[0]
+    assert _HEVC_VPS_4B in payload
+
+
+async def test_handle_client_attaches_after_keyframe_timeout(mocker) -> None:
+    """If the pump never surfaces a keyframe inside the timeout, the
+    viewer is attached anyway with an empty burst — same fallback as
+    before this gate existed."""
+    mocker.patch(f"{RELAY_MOD}._KEYFRAME_WAIT_TIMEOUT_SEC", 0.05)
+    r = _relay()
+    pump = asyncio.create_task(asyncio.sleep(60))
+    r._pump_task = pump
+    # Event stays clear; ``_buffer`` stays empty → burst will be b"".
+
+    writer = MagicMock()
+    writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 50051))
+    writer.drain = AsyncMock()
+    writer.wait_closed = AsyncMock()
+
+    try:
+        await r._handle_client(_EofReader(), writer)
+    finally:
+        r._cancel_close()
+        await _cancel_task(pump)
+
+    # No initial burst was written (buffer never gained a keyframe).
+    writer.write.assert_not_called()
+
+
+async def test_handle_client_skips_keyframe_wait_when_burst_available() -> None:
+    """Warm attach with a keyframe already in buffer: the gate must
+    NOT delay even one tick — the burst is written immediately."""
+    r = _relay()
+    pump = asyncio.create_task(asyncio.sleep(60))
+    r._pump_task = pump
+    r._buffer.extend(_MPEG_PS_PACK + b"prefix" + _HEVC_VPS_4B + b"frame")
+    # Important: leave _keyframe_seen UNSET to prove the gate is bypassed
+    # when the snapshot already has a keyframe.
+    assert r._keyframe_seen.is_set() is False
+
+    writer = MagicMock()
+    writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 50052))
+    writer.drain = AsyncMock()
+    writer.wait_closed = AsyncMock()
+
+    t0 = time.monotonic()
+    try:
+        await r._handle_client(_EofReader(), writer)
+    finally:
+        r._cancel_close()
+        await _cancel_task(pump)
+    elapsed = time.monotonic() - t0
+
+    # No keyframe-wait timeout was hit.
+    assert elapsed < 1.0
+    writer.write.assert_called_once()
+
+
+async def test_handle_client_attaches_writer_only_after_burst_write() -> None:
+    """The pump's live-forwarding must not start until the keyframe-
+    aligned initial burst has been delivered to the viewer.  Otherwise
+    the viewer can see deltas before the keyframe and paint grey."""
+    r = _relay()
+    pump = asyncio.create_task(asyncio.sleep(60))
+    r._pump_task = pump
+    r._buffer.extend(_MPEG_PS_PACK + b"prefix" + _HEVC_VPS_4B + b"frame")
+    r._keyframe_seen.set()
+
+    writer = MagicMock()
+    writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 50053))
+    writer.wait_closed = AsyncMock()
+    call_order: list[str] = []
+
+    async def _record_drain() -> None:
+        call_order.append("drain")
+
+    def _record_attach_writer() -> None:
+        if r._writer is writer:
+            call_order.append("writer_attached")
+
+    writer.drain = AsyncMock(side_effect=_record_drain)
+    # Sample whether the writer was attached at drain time.
+    drain_attached: list[bool] = []
+    original_drain = writer.drain.side_effect
+
+    async def _check_attach_during_drain() -> None:
+        drain_attached.append(r._writer is writer)
+        await original_drain()
+
+    writer.drain = AsyncMock(side_effect=_check_attach_during_drain)
+
+    try:
+        await r._handle_client(_EofReader(), writer)
+    finally:
+        r._cancel_close()
+        await _cancel_task(pump)
+
+    # At drain time the writer wasn't attached yet — the pump
+    # couldn't have stolen the channel before the burst was flushed.
+    assert drain_attached == [False]

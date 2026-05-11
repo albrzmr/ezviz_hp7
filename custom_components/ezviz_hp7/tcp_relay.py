@@ -68,6 +68,13 @@ _DEFAULT_WARM_HOLD_SECONDS = 60.0
 # (e.g. HA reloads its stream worker), we reuse the existing session.
 _POST_CLIENT_GRACE_SECONDS = 5.0
 
+# How long a fresh viewer waits for the pump task to surface a HEVC
+# keyframe (VPS NAL) before being attached anyway.  HP7 / CP7 emit a
+# VPS every ~2-4 s, so a 5 s ceiling tolerates one missed cycle.  On
+# timeout the viewer is attached mid-GOP — the same "grey for a few
+# seconds" behaviour as before this gate existed.
+_KEYFRAME_WAIT_TIMEOUT_SEC = 5.0
+
 
 class CpdMpegPsRelay:
     """Localhost TCP relay with at most one active upstream LAN session."""
@@ -102,6 +109,13 @@ class CpdMpegPsRelay:
         self._buffer = bytearray()
         self._writer: asyncio.StreamWriter | None = None
         self._close_handle: asyncio.TimerHandle | None = None
+        # ``_keyframe_seen`` is set by the pump the first time a HEVC
+        # VPS NAL lands in ``_buffer`` after a fresh ``_spin_up_upstream``.
+        # New viewers attached while the event is still clear wait for
+        # it (bounded by ``_KEYFRAME_WAIT_TIMEOUT_SEC``) so they don't
+        # start writing to ffmpeg mid-GOP — that would otherwise paint
+        # a grey frame until the next keyframe.
+        self._keyframe_seen: asyncio.Event = asyncio.Event()
         # Per-session bookkeeping for the stats summary.
         self._session_started_at: float = 0.0
         self._session_bytes: int = 0
@@ -226,7 +240,9 @@ class CpdMpegPsRelay:
         if self._stats is not None:
             self._stats.relay_clients_attached += 1
 
-        # Attach the writer to the (possibly pre-warmed) upstream.
+        # Spin the upstream up (or attach to it if warm), then snapshot
+        # the buffer.  The writer is NOT registered with the pump yet —
+        # see the keyframe gate below.
         attached_warm = False
         initial_burst = b""
         async with self._state_lock:
@@ -255,16 +271,38 @@ class CpdMpegPsRelay:
                         _LOGGER.debug("writer cleanup after spin-up failure: %s", exc)
                     return
             self._cancel_close()
-            self._writer = writer
-            _LOGGER.info(
-                "[RELAY] client %s attached (warm=%s, burst=%dB)",
-                peer,
-                attached_warm,
-                len(initial_burst),
-            )
 
-        # Send the initial keyframe-aligned burst, then let the pump
-        # task forward live bytes directly to the writer.
+        # If the buffer had no keyframe at attach time, wait for one
+        # before opening the firehose to the viewer.  Otherwise ffmpeg
+        # would start decoding mid-GOP and paint a grey frame until the
+        # next VPS lands (HP7/CP7: ~2-4 s).
+        if not initial_burst:
+            try:
+                await asyncio.wait_for(
+                    self._keyframe_seen.wait(),
+                    timeout=_KEYFRAME_WAIT_TIMEOUT_SEC,
+                )
+            except TimeoutError:
+                _LOGGER.debug(
+                    "[RELAY] keyframe wait timed out for %s — attaching mid-GOP",
+                    peer,
+                )
+            async with self._state_lock:
+                initial_burst = self._snapshot_buffer_for_new_client()
+
+        _LOGGER.info(
+            "[RELAY] client %s attached (warm=%s, burst=%dB)",
+            peer,
+            attached_warm,
+            len(initial_burst),
+        )
+
+        # Send the keyframe-aligned burst FIRST, then publish the writer
+        # so the pump can forward live bytes on top.  The brief window
+        # between the snapshot and the attach is bounded by the trim
+        # logic in ``_pump_upstream`` — any bytes that land in
+        # ``_buffer`` meanwhile are P/B-frames that ffmpeg can resync
+        # past once the next keyframe arrives.
         try:
             if initial_burst:
                 writer.write(initial_burst)
@@ -273,6 +311,8 @@ class CpdMpegPsRelay:
                 except (BrokenPipeError, ConnectionResetError):
                     _LOGGER.info("[RELAY] client closed during initial burst")
                     return
+            async with self._state_lock:
+                self._writer = writer
             await self._wait_for_client_eof(reader)
         finally:
             async with self._state_lock:
@@ -376,6 +416,9 @@ class CpdMpegPsRelay:
         self._lan = None
         self._decoder = None
         self._buffer = bytearray()
+        # Reset the keyframe gate so the next LAN session makes new
+        # viewers wait for its own first VPS.
+        self._keyframe_seen.clear()
         if lan is not None:
             try:
                 await asyncio.get_running_loop().run_in_executor(None, lan.close)
@@ -421,6 +464,14 @@ class CpdMpegPsRelay:
                 self._session_bytes += len(plain)
                 if len(self._buffer) > _BUFFER_TRIM_TARGET:
                     self._trim_buffer_to_last_keyframe()
+
+                # Wake any viewers waiting for the first VPS of this
+                # LAN session so they can attach with a keyframe-
+                # aligned burst instead of mid-GOP grey frames.
+                if not self._keyframe_seen.is_set() and (
+                    _HEVC_VPS_4B in plain or _HEVC_VPS_3B in plain
+                ):
+                    self._keyframe_seen.set()
 
                 # If a writer is attached, forward the new chunk live.
                 writer = self._writer
