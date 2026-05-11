@@ -1,8 +1,24 @@
-"""Data update coordinator for EZVIZ HP7."""
+"""Data update coordinator for EZVIZ HP7.
+
+Phase 6.2 split — the coordinator now polls two cloud endpoints at
+independent cadences:
+
+* alarms (``unifiedmsg/list``) every tick — latency-sensitive,
+  drives doorbell-ring / motion binary sensors and the
+  ``_install_event_prewarm`` listener.
+* static device info (``pagelist``) every
+  ``STATUS_POLL_INTERVAL_SEC`` — covers WiFi signal, firmware,
+  device status / IP, all of which change slowly.
+
+The merged dict consumed by entities is always a fresh-alarms +
+last-known-static composition, so a transient static-poll failure
+keeps the dashboard usable while the alarms continue to flow.
+"""
 
 from __future__ import annotations
 
 import logging
+import time
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -11,7 +27,7 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
-from .const import UPDATE_INTERVAL_SEC
+from .const import STATUS_POLL_INTERVAL_SEC, UPDATE_INTERVAL_SEC
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -51,20 +67,57 @@ class Hp7Coordinator(DataUpdateCoordinator):
         self.api = api
         self.serial = serial
         self._stats = stats
+        # Static-poll bookkeeping (cadence split).
+        self._cached_static: dict[str, Any] = {}
+        self._last_static_fetch: float = 0.0
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Fetch latest device status from the API on every tick.
+        """Fetch fresh alarms + (occasionally) refresh static device info.
 
-        Wraps any failure in ``UpdateFailed`` so HA can apply its usual
-        backoff + ``unavailable`` semantics rather than us silently
-        returning an empty dict and leaving entities with stale values.
+        Failure modes:
+
+        * Alarms fetch fails → wrap in ``UpdateFailed`` so HA marks
+          entities unavailable.  The dashboard would otherwise show a
+          stale alarm state forever.
+        * Static fetch fails → keep using the cached static dict and
+          log at debug.  If the cache is still empty (first tick),
+          fall back to wrapping in ``UpdateFailed`` so the entry
+          surface as ``ConfigEntryNotReady`` instead of registering
+          entities with half-empty data.
         """
         if self._stats is not None:
             self._stats.cloud_polls += 1
+
         try:
-            return await self.hass.async_add_executor_job(
-                self.api.get_status,
+            alarms = await self.hass.async_add_executor_job(
+                self.api.get_alarms,
                 self.serial,
             )
         except Exception as exc:
-            raise UpdateFailed(f"EZVIZ HP7 poll failed: {exc}") from exc
+            raise UpdateFailed(f"EZVIZ HP7 alarm poll failed: {exc}") from exc
+        if self._stats is not None:
+            self._stats.cloud_polls_alarms += 1
+
+        now = time.monotonic()
+        if now - self._last_static_fetch >= STATUS_POLL_INTERVAL_SEC:
+            try:
+                self._cached_static = await self.hass.async_add_executor_job(
+                    self.api.get_static_status,
+                    self.serial,
+                )
+                self._last_static_fetch = now
+                if self._stats is not None:
+                    self._stats.cloud_polls_static += 1
+            except Exception as exc:
+                # Tolerate transient failures once the cache is warm.
+                # On the very first tick the cache is empty and we
+                # MUST surface the failure so HA retries ``setup_entry``.
+                if not self._cached_static:
+                    raise UpdateFailed(
+                        f"EZVIZ HP7 initial static poll failed: {exc}"
+                    ) from exc
+                _LOGGER.debug(
+                    "Static poll failed (%s) — reusing cached static data", exc
+                )
+
+        return {**self._cached_static, **alarms}
