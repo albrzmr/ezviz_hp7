@@ -31,6 +31,7 @@ from pyezvizapi.exceptions import (
 #
 # We keep our own patched ``EzvizCAS`` here as a single vendored
 # file until the fix is merged upstream.
+from .helpers import bare_serial
 from .pylocalapi.cas import EzvizCAS
 
 if TYPE_CHECKING:
@@ -206,7 +207,7 @@ class Hp7Api:
                 return
 
             # Try sub-serial first; if empty, fall back to main serial
-            main_serial = serial.split("-")[0] if "-" in serial else serial
+            main_serial = bare_serial(serial)
             dev = self._client.get_device_infos(main_serial)
 
             sub_cat = (
@@ -251,7 +252,7 @@ class Hp7Api:
         Raises:
             RuntimeError: if the key cannot be obtained.
         """
-        bare = serial.split("-")[0] if "-" in serial else serial
+        bare = bare_serial(serial)
 
         if not force:
             cached = self._aes_cache.get(bare)
@@ -370,7 +371,7 @@ class Hp7Api:
         if serial is None:
             self._aes_cache.clear()
             return
-        bare = serial.split("-")[0] if "-" in serial else serial
+        bare = bare_serial(serial)
         self._aes_cache.pop(bare, None)
 
     def get_related_device(self, serial: str) -> str:
