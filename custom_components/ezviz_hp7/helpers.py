@@ -21,6 +21,19 @@ if TYPE_CHECKING:
     from .api import Hp7Api
 
 
+def bare_serial(serial: str) -> str:
+    """Return the main-device half of a HP7/CP7 serial.
+
+    HP7 / CP7 stores its serial in HA's config entry as
+    ``MAINSERIAL-CAMSERIAL`` (a composite of the main doorbell unit
+    and the camera module).  Cloud calls keyed by device want the
+    main half; ``RelatedDevice`` wants the camera half.  This helper
+    returns the main half — everything before the first ``-`` — or
+    the input unchanged when no hyphen is present.
+    """
+    return serial.split("-", 1)[0]
+
+
 def get_device_info(serial: str, api: Hp7Api | None = None) -> DeviceInfo:
     """Return the canonical ``DeviceInfo`` for a doorbell.
 
