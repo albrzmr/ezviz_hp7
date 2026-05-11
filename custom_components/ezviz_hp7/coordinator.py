@@ -67,9 +67,14 @@ class Hp7Coordinator(DataUpdateCoordinator):
         self.api = api
         self.serial = serial
         self._stats = stats
-        # Static-poll bookkeeping (cadence split).
+        # Static-poll bookkeeping (cadence split).  ``_last_static_fetch``
+        # uses ``None`` as the "never fetched" sentinel rather than ``0.0``
+        # — ``time.monotonic()`` has an undefined origin (the system
+        # uptime on Linux, the host uptime on macOS, etc.), so a sentinel
+        # of ``0.0`` would falsely look "recent" on freshly-booted Linux
+        # boxes whose monotonic clock is still in the seconds range.
         self._cached_static: dict[str, Any] = {}
-        self._last_static_fetch: float = 0.0
+        self._last_static_fetch: float | None = None
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch fresh alarms + (occasionally) refresh static device info.
@@ -99,7 +104,10 @@ class Hp7Coordinator(DataUpdateCoordinator):
             self._stats.cloud_polls_alarms += 1
 
         now = time.monotonic()
-        if now - self._last_static_fetch >= STATUS_POLL_INTERVAL_SEC:
+        if (
+            self._last_static_fetch is None
+            or now - self._last_static_fetch >= STATUS_POLL_INTERVAL_SEC
+        ):
             try:
                 self._cached_static = await self.hass.async_add_executor_job(
                     self.api.get_static_status,

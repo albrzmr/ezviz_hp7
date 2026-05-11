@@ -77,7 +77,7 @@ def coord(hass, mock_config_entry):
         api: MagicMock | None = None,
         stats: ActivityStats | None = None,
         cached_static: dict | None = None,
-        last_static_fetch: float = 0.0,
+        last_static_fetch: float | None = None,
     ) -> Hp7Coordinator:
         c = Hp7Coordinator(
             hass,
@@ -88,7 +88,12 @@ def coord(hass, mock_config_entry):
         )
         if cached_static is not None:
             c._cached_static = dict(cached_static)
-        c._last_static_fetch = last_static_fetch
+        # ``None`` (the default) keeps whatever ``Hp7Coordinator.__init__``
+        # set — i.e. "never fetched" — so the first-tick / cold-cache
+        # branches behave identically on machines with low monotonic-clock
+        # values (fresh CI runners) and high ones (a developer laptop).
+        if last_static_fetch is not None:
+            c._last_static_fetch = last_static_fetch
         return c
 
     return _make
