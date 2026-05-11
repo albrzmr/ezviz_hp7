@@ -155,8 +155,8 @@ class CpdMpegPsRelay:
         self._server.close()
         try:
             await self._server.wait_closed()
-        except Exception:
-            pass
+        except Exception as exc:
+            _LOGGER.debug("server.wait_closed() raised during stop: %s", exc)
         self._server = None
         self._port = 0
         async with self._state_lock:
@@ -251,8 +251,8 @@ class CpdMpegPsRelay:
                     try:
                         writer.close()
                         await writer.wait_closed()
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _LOGGER.debug("writer cleanup after spin-up failure: %s", exc)
                     return
             self._cancel_close()
             self._writer = writer
@@ -282,8 +282,8 @@ class CpdMpegPsRelay:
             try:
                 writer.close()
                 await writer.wait_closed()
-            except Exception:
-                pass
+            except Exception as exc:
+                _LOGGER.debug("writer cleanup at disconnect: %s", exc)
             duration = time.monotonic() - client_started_at
             _LOGGER.info(
                 "[RELAY] client %s disconnected (duration=%.1fs, warm_attach=%s)",
@@ -368,8 +368,10 @@ class CpdMpegPsRelay:
             task.cancel()
             try:
                 await task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
                 pass
+            except Exception as exc:
+                _LOGGER.debug("pump task error during teardown: %s", exc)
         lan = self._lan
         self._lan = None
         self._decoder = None
@@ -377,8 +379,8 @@ class CpdMpegPsRelay:
         if lan is not None:
             try:
                 await asyncio.get_running_loop().run_in_executor(None, lan.close)
-            except Exception:
-                pass
+            except Exception as exc:
+                _LOGGER.debug("lan.close() raised during teardown: %s", exc)
             duration = (
                 time.monotonic() - self._session_started_at
                 if self._session_started_at

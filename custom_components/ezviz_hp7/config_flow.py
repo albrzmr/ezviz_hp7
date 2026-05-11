@@ -130,7 +130,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call
                 errors={"base": "auth"},
             )
         except Exception as exc:
-            _LOGGER.error("EZVIZ API error: %s", exc)
+            _LOGGER.exception("EZVIZ API error: %s", exc)
             return self.async_show_form(
                 step_id="user",
                 data_schema=DATA_SCHEMA,

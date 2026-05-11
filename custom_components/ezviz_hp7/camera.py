@@ -237,6 +237,7 @@ class Hp7Camera(Camera, CoordinatorEntity):
                 "Error fetching snapshot for %s: %s",
                 self._serial,
                 exc,
+                exc_info=True,
             )
             return None
 

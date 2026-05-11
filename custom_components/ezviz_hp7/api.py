@@ -327,9 +327,14 @@ class Hp7Api:
             except Exception as relog_exc:
                 if self._stats is not None:
                     self._stats.errors_cas += 1
+                # Preserve the original CAS failure as ``__cause__`` (more
+                # actionable than the re-login error for debugging); the
+                # message carries both so the log line still tells the
+                # full story.
                 raise RuntimeError(
-                    f"AES fetch failed and re-login failed: {relog_exc}"
-                ) from relog_exc
+                    f"AES fetch failed and re-login failed "
+                    f"(CAS: {exc}; relogin: {relog_exc})"
+                ) from exc
             key_str = _try_once()
 
         elapsed = time.monotonic() - t0
