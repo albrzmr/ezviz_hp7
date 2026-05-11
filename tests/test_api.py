@@ -496,6 +496,228 @@ def test_get_status_local_ip_falls_back_to_wifi_address(patched_api) -> None:
     assert out["local_ip"] == "10.0.0.5"
 
 
+# ── get_static_status (phase 6.1 split) ───────────────────────────
+
+
+def _set_static_status_payload(payload: dict) -> None:
+    """Helper: ``EzvizCamera.status(refresh=False)`` returns ``payload``."""
+    api_mod.EzvizCamera.return_value.status.return_value = payload
+
+
+def test_get_static_status_raises_when_client_uninitialised(monkeypatch) -> None:
+    api = Hp7Api(username="u")
+    monkeypatch.setattr(api, "ensure_client", lambda: None)
+    with pytest.raises(RuntimeError, match="cloud client not initialised"):
+        api.get_static_status("SER")
+
+
+def test_get_static_status_calls_pagelist_only(patched_api) -> None:
+    """Static poll hits ``get_device_infos`` (pagelist) but **not**
+    ``get_device_messages_list`` (alarms) — that's the whole point."""
+    _set_static_status_payload({"name": "Doorbell", "WIFI": {}})
+    patched_api.get_static_status("SER")
+    patched_api._client.get_device_infos.assert_called_once_with("SER")
+    patched_api._client.get_device_messages_list.assert_not_called()
+
+
+def test_get_static_status_maps_device_and_wifi_fields(patched_api) -> None:
+    _set_static_status_payload(
+        {
+            "name": "Doorbell",
+            "version": "V5.3.6 build 250825",
+            "upgrade_available": False,
+            "status": 1,
+            "wan_ip": "203.0.113.1",
+            "WIFI": {"ssid": "Casa", "signal": 80, "address": "WIFI-IP"},
+            "local_ip": "192.0.2.10",
+            "local_rtsp_port": "8554",
+        }
+    )
+    out = patched_api.get_static_status("SER")
+    assert out == {
+        "name": "Doorbell",
+        "version": "V5.3.6 build 250825",
+        "upgrade_available": False,
+        "status": 1,
+        "wan_ip": "203.0.113.1",
+        "ssid": "Casa",
+        "signal": 80,
+        "local_ip": "192.0.2.10",
+        "local_rtsp_port": "8554",
+    }
+
+
+def test_get_static_status_falls_back_local_ip_to_wifi_address(patched_api) -> None:
+    _set_static_status_payload(
+        {"name": "D", "WIFI": {"address": "10.0.0.5"}, "local_ip": None}
+    )
+    out = patched_api.get_static_status("SER")
+    assert out["local_ip"] == "10.0.0.5"
+
+
+def test_get_static_status_local_rtsp_port_defaults_to_554(patched_api) -> None:
+    _set_static_status_payload({"name": "D", "WIFI": {}, "local_rtsp_port": None})
+    out = patched_api.get_static_status("SER")
+    assert out["local_rtsp_port"] == "554"
+
+
+def test_get_static_status_does_not_request_alarm_refresh(patched_api) -> None:
+    """``camera.status`` must be called with ``refresh=False`` to skip
+    the inner ``unifiedmsg/list`` HTTP request."""
+    _set_static_status_payload({"name": "D", "WIFI": {}})
+    patched_api.get_static_status("SER")
+    api_mod.EzvizCamera.return_value.status.assert_called_once_with(refresh=False)
+
+
+# ── get_alarms (phase 6.1 split) ──────────────────────────────────
+
+
+def _set_alarms_payload(payload: dict) -> None:
+    """Helper: ``EzvizCamera.status(refresh=True, latest_alarm=...)``
+    returns ``payload`` (which carries the alarm fields and possibly
+    ``Seconds_Last_Trigger``)."""
+    api_mod.EzvizCamera.return_value.status.return_value = payload
+
+
+def _set_messages_response(messages: list) -> None:
+    patched_client = api_mod.EzvizClient.return_value
+    patched_client.get_device_messages_list.return_value = {"message": messages}
+
+
+def test_get_alarms_raises_when_client_uninitialised(monkeypatch) -> None:
+    api = Hp7Api(username="u")
+    monkeypatch.setattr(api, "ensure_client", lambda: None)
+    with pytest.raises(RuntimeError, match="cloud client not initialised"):
+        api.get_alarms("SER")
+
+
+def test_get_alarms_calls_unifiedmsg_only(patched_api) -> None:
+    """Alarm poll hits ``get_device_messages_list`` only — no pagelist."""
+    _set_alarms_payload(
+        {
+            "Seconds_Last_Trigger": 3,
+            "last_alarm_time": "2026-05-11 10:00:00",
+            "last_alarm_pic": "https://x/snap.jpg",
+            "last_alarm_type_name": "Smart Detection Alarm",
+        }
+    )
+    _set_messages_response([{"deviceSerial": "SER", "title": "Smart Detection Alarm"}])
+    patched_api.get_alarms("SER")
+    patched_api._client.get_device_messages_list.assert_called_once_with(
+        serials="SER", limit=1, date="", end_time=""
+    )
+    patched_api._client.get_device_infos.assert_not_called()
+
+
+def test_get_alarms_maps_alarm_fields(patched_api) -> None:
+    _set_alarms_payload(
+        {
+            "Seconds_Last_Trigger": 5,
+            "last_alarm_time": "2026-05-11 10:00:00",
+            "last_alarm_pic": "https://x/snap.jpg",
+            "last_alarm_type_name": "Doorbell ring",
+        }
+    )
+    _set_messages_response([{"deviceSerial": "SER", "title": "Doorbell ring"}])
+    out = patched_api.get_alarms("SER")
+    assert out == {
+        "seconds_last_trigger": 5,
+        "last_alarm_time": "2026-05-11 10:00:00",
+        "last_alarm_pic": "https://x/snap.jpg",
+        "alarm_name": "Doorbell ring",
+    }
+
+
+def test_get_alarms_ignores_messages_from_other_devices(patched_api) -> None:
+    """Multi-device accounts: ``get_device_messages_list`` may return
+    other serials in the payload.  The latest-for-this-serial filter
+    has to drop them before normalisation."""
+    _set_alarms_payload({"Seconds_Last_Trigger": None, "last_alarm_time": None})
+    _set_messages_response(
+        [
+            {"deviceSerial": "OTHER", "title": "Some other alarm"},
+            {"deviceSerial": "OTHER2", "title": "Yet another"},
+        ]
+    )
+    patched_api.get_alarms("SER")
+    # ``latest_alarm`` passed to ``status`` must be ``None``.
+    _, kwargs = api_mod.EzvizCamera.return_value.status.call_args
+    assert kwargs == {"refresh": True, "latest_alarm": None}
+
+
+def test_get_alarms_handles_empty_message_list(patched_api) -> None:
+    _set_alarms_payload({"Seconds_Last_Trigger": None})
+    _set_messages_response([])
+    out = patched_api.get_alarms("SER")
+    assert out["last_alarm_time"] is None
+    assert out["last_alarm_pic"] is None
+    assert out["alarm_name"] is None
+
+
+def test_get_alarms_handles_messages_key_variant(patched_api) -> None:
+    """The cloud occasionally returns ``messages`` (plural) instead of
+    ``message`` — handle both."""
+    _set_alarms_payload(
+        {"last_alarm_time": "2026-05-11 09:00:00", "last_alarm_type_name": "Ring"}
+    )
+    patched_api._client.get_device_messages_list.return_value = {
+        "messages": [{"deviceSerial": "SER", "title": "Ring"}]
+    }
+    out = patched_api.get_alarms("SER")
+    assert out["last_alarm_time"] == "2026-05-11 09:00:00"
+    assert out["alarm_name"] == "Ring"
+
+
+def test_get_alarms_creates_camera_with_empty_device_obj(patched_api) -> None:
+    """The camera helper must be instantiated with ``device_obj={}`` so
+    no second pagelist HTTP request is issued under the hood."""
+    _set_alarms_payload({"Seconds_Last_Trigger": None})
+    _set_messages_response([{"deviceSerial": "SER", "title": "x"}])
+    patched_api.get_alarms("SER")
+    args, kwargs = api_mod.EzvizCamera.call_args
+    assert args == (patched_api._client, "SER")
+    assert kwargs == {"device_obj": {}}
+
+
+# ── get_status compat (calls both halves) ─────────────────────────
+
+
+def test_get_status_calls_both_halves(patched_api) -> None:
+    _set_alarms_payload(
+        {
+            "name": "Doorbell",
+            "version": "V5",
+            "upgrade_available": False,
+            "status": 1,
+            "wan_ip": "203.0.113.1",
+            "WIFI": {"ssid": "X", "signal": 50, "address": "192.0.2.10"},
+            "local_ip": "192.0.2.10",
+            "local_rtsp_port": "554",
+            "Seconds_Last_Trigger": 1,
+            "last_alarm_time": "2026-05-11 10:00:00",
+            "last_alarm_pic": "https://x/snap.jpg",
+            "last_alarm_type_name": "Ring",
+        }
+    )
+    _set_messages_response([{"deviceSerial": "SER", "title": "Ring"}])
+    out = patched_api.get_status("SER")
+    # Both endpoints reached.
+    patched_api._client.get_device_infos.assert_called_once_with("SER")
+    patched_api._client.get_device_messages_list.assert_called_once()
+    # Merged output carries both static and alarm fields.
+    assert set(out.keys()) >= {
+        "name",
+        "version",
+        "status",
+        "ssid",
+        "local_ip",
+        "last_alarm_time",
+        "last_alarm_pic",
+        "alarm_name",
+        "seconds_last_trigger",
+    }
+
+
 # ── close ──────────────────────────────────────────────────────────
 
 

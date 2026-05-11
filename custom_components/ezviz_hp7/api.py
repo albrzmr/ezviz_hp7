@@ -504,23 +504,33 @@ class Hp7Api:
         """
         return self._try_unlock(serial, DEFAULT_GATE_LOCK_NO)
 
-    def get_status(self, serial: str) -> dict[str, Any]:
-        """Get current device status.
+    # ── Status / alarm polls (split for cadence — phase 6.1) ──────────
+    #
+    # Originally a single ``get_status`` did pagelist + unifiedmsg/list
+    # on every coordinator tick (≈11 k cloud hits per day at 15 s).
+    # The two endpoints carry data with very different volatility, so
+    # ``coordinator.py`` now schedules them independently — alarms at
+    # the fast tick rate, the static pagelist every few minutes.  The
+    # legacy merged ``get_status`` is preserved as a thin alias for
+    # tests and any external caller.
 
-        Propagates any error from the underlying cloud call so that the
-        coordinator can wrap it in ``UpdateFailed`` and HA marks
-        entities ``unavailable`` correctly.  Returning ``{}`` on errors
-        (the previous behaviour) hides connectivity failures from the
-        user and keeps stale entity values around forever.
+    def get_static_status(self, serial: str) -> dict[str, Any]:
+        """Slow poll: pagelist-derived device info (no alarm fetch).
+
+        Cost: one ``pagelist`` HTTP call.  Returns every field whose
+        value changes on the timescale of minutes-to-days — device
+        status, firmware version, WiFi info, IP — but **none** of the
+        alarm fields.  Pair with ``get_alarms`` for the full picture.
         """
         self.ensure_client()
         if not self._client:
             raise RuntimeError("EZVIZ HP7 cloud client not initialised")
 
-        camera = EzvizCamera(self._client, serial)
-        cam_status = camera.status(refresh=True)
+        device_obj = self._client.get_device_infos(serial)
+        camera = EzvizCamera(self._client, serial, device_obj=device_obj)
+        cam_status = camera.status(refresh=False)
         wifi_info = cam_status.get("WIFI") or {}
-        _LOGGER.debug("Device status received for %s", serial)
+        _LOGGER.debug("Static device status received for %s", serial)
 
         return {
             "name": cam_status.get("name"),
@@ -528,18 +538,67 @@ class Hp7Api:
             "upgrade_available": cam_status.get("upgrade_available"),
             "status": cam_status.get("status"),
             "wan_ip": cam_status.get("wan_ip"),
-            # ``PIR_Status`` and ``Motion_Trigger`` aren't populated by
-            # the HP7 / CP7 firmware (verified across hundreds of
-            # polls) — no entity reads them, so we don't pretend to
-            # expose them.  Motion / presence detection is signalled
-            # via the cloud alarm timeline (``last_alarm_time`` plus
-            # ``alarm_name``) which the binary sensors use.
-            "seconds_last_trigger": cam_status.get("Seconds_Last_Trigger"),
-            "last_alarm_time": cam_status.get("last_alarm_time"),
-            "last_alarm_pic": cam_status.get("last_alarm_pic"),
-            "alarm_name": cam_status.get("last_alarm_type_name"),
             "ssid": wifi_info.get("ssid"),
             "signal": wifi_info.get("signal"),
             "local_ip": cam_status.get("local_ip") or wifi_info.get("address"),
             "local_rtsp_port": cam_status.get("local_rtsp_port") or "554",
         }
+
+    def get_alarms(self, serial: str) -> dict[str, Any]:
+        """Fast poll: latest alarm event via ``unifiedmsg/list``.
+
+        Cost: one ``unifiedmsg/list`` HTTP call.  Returns only the
+        alarm-derived fields the binary sensors and the prewarm hook
+        depend on — ``last_alarm_time``, ``last_alarm_pic``,
+        ``alarm_name``, ``seconds_last_trigger``.
+
+        The latest message is normalised through ``EzvizCamera`` with
+        an empty ``device_obj`` so we reuse upstream's parsing without
+        triggering a second ``pagelist`` request.
+        """
+        self.ensure_client()
+        if not self._client:
+            raise RuntimeError("EZVIZ HP7 cloud client not initialised")
+
+        response = self._client.get_device_messages_list(
+            serials=serial, limit=1, date="", end_time=""
+        )
+        messages = response.get("message") or response.get("messages") or []
+        if not isinstance(messages, list):
+            messages = []
+        latest = next(
+            (
+                m
+                for m in messages
+                if isinstance(m, dict) and m.get("deviceSerial") == serial
+            ),
+            None,
+        )
+
+        # ``device_obj={}`` keeps the camera helper offline — it only
+        # needs the alarm payload to populate the four fields below.
+        camera = EzvizCamera(self._client, serial, device_obj={})
+        cam_status = camera.status(refresh=True, latest_alarm=latest)
+        _LOGGER.debug("Alarm poll for %s returned message=%s", serial, bool(latest))
+
+        return {
+            "seconds_last_trigger": cam_status.get("Seconds_Last_Trigger"),
+            "last_alarm_time": cam_status.get("last_alarm_time"),
+            "last_alarm_pic": cam_status.get("last_alarm_pic"),
+            "alarm_name": cam_status.get("last_alarm_type_name"),
+        }
+
+    def get_status(self, serial: str) -> dict[str, Any]:
+        """Legacy combined poll — kept for backwards compatibility.
+
+        Equivalent to merging ``get_static_status`` and ``get_alarms``.
+        New code should call them separately at their respective
+        cadences (the coordinator owns the split scheduling).
+
+        Propagates any error from the underlying cloud calls so the
+        coordinator can wrap it in ``UpdateFailed`` and HA marks
+        entities ``unavailable`` correctly.
+        """
+        static = self.get_static_status(serial)
+        alarms = self.get_alarms(serial)
+        return {**static, **alarms}
