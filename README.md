@@ -45,13 +45,20 @@ ffmpeg (which Home Assistant already ships).
 
 - Auto-discovery and registration of your HP7 / CP7.
 - **Live video streaming** in HA, with two selectable modes:
-  - **MJPEG (default):** ~1 s glass-to-glass latency, universal browser
+  - **MJPEG (default):** ~500 ms glass-to-glass latency, universal browser
     compatibility, transcoded on the fly to motion JPEG (720p, 8 fps).
   - **HLS:** native 2K HEVC at 25 fps, ~10–20 s of delay; needs an
     HEVC-capable client (Safari / iOS / hardware-decoded Android).
 - **Door unlock** (lock #2 by default).
 - **Gate unlock** (lock #1 by default).
-- Device sensors: firmware, online status, last alarm picture and type, doorbell-ring / smart-detection / gate-open events.
+- **Sensors**: firmware version, online status, WiFi signal / SSID,
+  LAN / WAN IP, last-alarm timestamp, alarm name, last snapshot URL,
+  firmware-update available, seconds since last trigger.
+- **Binary sensors** (event-driven, pulse for a few seconds): doorbell
+  ring, smart detection, intelligent detection, gate open, lock unlock.
+- **Smart pre-warming**: when the cloud reports a doorbell ring or
+  motion event, the integration opens the LAN session in advance so
+  that tapping the notification shows the first frame near-instantly.
 - Service calls usable from automations and scripts.
 - Multi-region support (EU / US / CN / AS / SA / RU).
 
@@ -64,13 +71,15 @@ full 2K detail and have an HEVC-capable client.
 
 | Mode  | Latency  | Resolution / fps | CPU on HA host (per viewer) | Browser support |
 |-------|----------|------------------|------------------------------|-----------------|
-| MJPEG | ~1 s     | 1280×720 / 8 fps | one ffmpeg subprocess (~30–50 % of one core on Pi 4) | Universal |
+| MJPEG | ~500 ms  | 1280×720 / 8 fps | one ffmpeg subprocess (~30–50 % of one core on Pi 4) | Universal |
 | HLS   | 10–20 s  | 2048×1296 / 25 fps | minimal (HA's built-in stream worker) | HEVC-capable only |
 
 ### Live-stream notes
 
-- Each viewer triggers a fresh live session on the doorbell.  The
-  first frame typically appears within 1–2 s.
+- The first frame typically appears within 1–2 s on a **cold** LAN
+  session.  When the session is **already warm** — either pre-warmed
+  by a recent doorbell event, or reused within the post-disconnect
+  grace window — the first frame is sub-second.
 - Re-pairing the doorbell rotates its per-device session key; the
   integration refetches it transparently the next time a viewer
   connects.
@@ -84,16 +93,46 @@ full 2K detail and have an HEVC-capable client.
 ## How it works (brief)
 
 ```
-HA Stream component → ffmpeg → asyncio TCP relay → LAN session to the doorbell
+HA Stream component → ffmpeg → asyncio TCP relay → encrypted LAN session
                                                           ↑
-                                                    EZVIZ cloud login
+                                              EZVIZ cloud login + EUCAS
 ```
 
 The integration logs in through the EZVIZ cloud API to discover the
-doorbell, opens a local TCP relay, then exposes the live stream to
-Home Assistant either as **HLS** (HA's built-in Stream component
-handles muxing) or **MJPEG** (a small ffmpeg subprocess transcodes
-to motion JPEG for low latency).
+doorbell, fetches an AES-128 control key from EZVIZ's EUCAS server,
+opens an encrypted LAN session to the doorbell (ECDH P-256 →
+ChaCha20 stream cipher), pipes the decrypted MPEG-PS bytes through a
+local TCP relay, and exposes the live view to Home Assistant either
+as **HLS** (HA's built-in Stream component muxes HEVC + AAC) or
+**MJPEG** (a small ffmpeg subprocess transcodes to motion JPEG for
+sub-second latency).
+
+The full LAN protocol — wire format, key derivation, packet handling
+— is documented under
+[`docs/cpd7-stream-recipe/`](docs/cpd7-stream-recipe/) for the
+curious.
+
+---
+
+## Cloud-friendly polling
+
+To keep the EZVIZ cloud footprint as small as possible without
+sacrificing event latency, the integration polls two endpoints at
+different cadences:
+
+- **Alarm timeline** (``unifiedmsg/list``) — every 15 s.  Drives the
+  doorbell-ring / motion binary sensors and the pre-warming
+  listener, so it needs to be fresh.
+- **Static device info** (``pagelist``) — every 5 min.  Covers
+  firmware, WiFi signal, IPs and the like, all of which change
+  slowly.  Between refreshes the integration serves a cached copy,
+  and a transient failure of this call is tolerated silently so the
+  dashboard stays live.
+
+The result is roughly **6 000 HTTP calls per day per doorbell** —
+about half of what a naive 15 s combined-poll would generate.  Per-
+install random ``featureCode`` further reduces the chance of being
+caught by anti-abuse heuristics on the cloud side.
 
 ---
 
@@ -130,7 +169,9 @@ relay used for streaming.
 
 After setup you'll see:
 
-- A `camera.ezviz_cp7_<serial>` entity exposing the live stream and last
+- A camera entity named **Stream** (typically
+  `camera.ezviz_*_stream`, exact ID depends on Home Assistant's
+  slugging of the device name) exposing the live stream and last
   alarm snapshot.
 - Sensors and binary sensors for firmware, online state, doorbell ring,
   smart-detection events, gate / lock status.
@@ -184,14 +225,31 @@ logger:
 
 Useful log markers:
 
-- `... relay listening on 127.0.0.1:NNNN` — local relay started.
-- `... relay client connected` — HA Stream worker connected.
-- `... PLAY accepted` — play request accepted by the doorbell.
-- `... session key derived` — LAN handshake completed.
-- `... keyframe found ... stream synced` — first video keyframe seen,
-  bytes are flowing to ffmpeg.
+- `CPD7 relay listening on 127.0.0.1:NNNN` — local relay started.
+- `[RELAY] client connected from ...` — HA Stream worker connected.
+- `CPD7 decoder: ChaCha20 key derived` (DEBUG) — LAN handshake
+  completed; encrypted bytes can now be decoded.
+- `CPD7 decoder: keyframe found at +N ... stream synced` (DEBUG) —
+  first video keyframe seen, bytes are flowing to ffmpeg.
 - `[libav.hevc] PPS id out of range` (repeated) — keyframe sync
   failed (open an issue with the surrounding log).
+
+The integration also emits a one-line activity summary every 5
+minutes (``EZVIZ HP7 stats (uptime=...): {...}``).  Grepping for
+``EZVIZ HP7 stats`` in the log is a quick way to inspect cloud-poll
+counts, AES cache hits, LAN session totals and pre-warm efficacy
+without enabling debug logging.
+
+---
+
+## Quality
+
+The integration ships with a CI-gated test suite — 370+ unit and
+integration tests covering ~94 % of the integration's lines.  Every
+commit on ``main`` is validated by GitHub Actions: ruff
+(lint + format), pytest, hassfest, HACS validation, mypy, and
+codecov upload.  See the badges at the top of this README for live
+status.
 
 ---
 
