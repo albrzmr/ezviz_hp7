@@ -147,7 +147,6 @@ async def serve_mjpeg(
     stderr_task = asyncio.create_task(_drain_stderr(proc))
     total_bytes = 0
     end_reason = "ok"
-    real_error: BaseException | None = None
     try:
         assert proc.stdout is not None
         while True:
@@ -170,7 +169,6 @@ async def serve_mjpeg(
     except Exception as exc:
         if stats is not None:
             stats.errors_mjpeg += 1
-        real_error = exc
         end_reason = f"error:{type(exc).__name__}"
         _LOGGER.warning(
             "[MJPEG] unexpected session error: %s: %s", type(exc).__name__, exc
@@ -196,7 +194,6 @@ async def serve_mjpeg(
             (total_bytes / 1024 / duration) if duration > 0 else 0,
             end_reason,
         )
-    _ = real_error  # keep variable referenced; aids future debugging hooks
     return response
 
 

@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import struct
 import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
@@ -498,7 +497,3 @@ class CpdMpegPsRelay:
                 return
             _LOGGER.info("CPD7 relay: warm window expired — closing upstream")
             await self._teardown_upstream()
-
-
-# Suppress unused-import warning from struct in earlier revisions if present.
-_ = struct

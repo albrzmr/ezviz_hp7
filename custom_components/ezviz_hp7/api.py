@@ -186,17 +186,13 @@ class Hp7Api:
             _LOGGER.error("[EZVIZ-AUTH] cloud login FAILED: %s", exc)
             raise ValueError(f"Authentication failed: {exc}") from exc
 
-    def login(self) -> bool:
+    def login(self) -> None:
         """Authenticate with EZVIZ server.
-
-        Returns:
-            True if authentication was successful.
 
         Raises:
             RuntimeError: If authentication fails.
         """
         self.ensure_client()
-        return True
 
     def detect_capabilities(self, serial: str) -> None:
         """Detect device capabilities from EZVIZ API.
