@@ -598,17 +598,44 @@ def test_keyframe_event_is_initially_unset() -> None:
     assert _relay()._keyframe_seen.is_set() is False
 
 
-async def test_pump_sets_keyframe_event_when_vps_4b_seen() -> None:
+async def test_pump_sets_keyframe_event_when_vps_4b_and_full_tail_seen(
+    mocker,
+) -> None:
+    """A bare VPS isn't enough — the gate also requires
+    ``_KEYFRAME_MIN_TAIL_BYTES`` of slice data behind it."""
+    mocker.patch(f"{RELAY_MOD}._KEYFRAME_MIN_TAIL_BYTES", 64)
     r = _relay()
-    r._lan = _FakeLan([b"prefix-bytes-no-vps" + _HEVC_VPS_4B + b"after"])
+    r._lan = _FakeLan([b"\xaa" * 8 + _HEVC_VPS_4B + b"\xbb" * 200])
     r._decoder = _FakeDecoder()
     await r._pump_upstream()
     assert r._keyframe_seen.is_set() is True
 
 
-async def test_pump_sets_keyframe_event_when_vps_3b_seen() -> None:
+async def test_pump_sets_keyframe_event_when_vps_3b_and_full_tail_seen(
+    mocker,
+) -> None:
+    mocker.patch(f"{RELAY_MOD}._KEYFRAME_MIN_TAIL_BYTES", 64)
     r = _relay()
-    r._lan = _FakeLan([b"prefix" + _HEVC_VPS_3B + b"after"])
+    r._lan = _FakeLan([b"\xaa" * 8 + _HEVC_VPS_3B + b"\xbb" * 200])
+    r._decoder = _FakeDecoder()
+    await r._pump_upstream()
+    assert r._keyframe_seen.is_set() is True
+
+
+async def test_pump_keyframe_event_stays_clear_until_tail_fills(
+    mocker,
+) -> None:
+    """First chunk: VPS arrives but only a few bytes of slice trail it
+    — gate stays clear.  Second chunk: more slice bytes land → gate
+    flips."""
+    mocker.patch(f"{RELAY_MOD}._KEYFRAME_MIN_TAIL_BYTES", 1024)
+    r = _relay()
+    r._lan = _FakeLan(
+        [
+            _HEVC_VPS_4B + b"\xbb" * 100,  # bare NAL, not enough tail yet
+            b"\xcc" * 2000,  # plenty of slice data → gate flips
+        ]
+    )
     r._decoder = _FakeDecoder()
     await r._pump_upstream()
     assert r._keyframe_seen.is_set() is True
@@ -617,6 +644,19 @@ async def test_pump_sets_keyframe_event_when_vps_3b_seen() -> None:
 async def test_pump_leaves_keyframe_event_clear_when_no_vps() -> None:
     r = _relay()
     r._lan = _FakeLan([b"only-deltas-no-vps-here"])
+    r._decoder = _FakeDecoder()
+    await r._pump_upstream()
+    assert r._keyframe_seen.is_set() is False
+
+
+async def test_pump_leaves_keyframe_event_clear_when_tail_too_short(
+    mocker,
+) -> None:
+    """VPS arrives but the trailing slice bytes never reach the
+    minimum required tail size — gate must stay clear."""
+    mocker.patch(f"{RELAY_MOD}._KEYFRAME_MIN_TAIL_BYTES", 4096)
+    r = _relay()
+    r._lan = _FakeLan([_HEVC_VPS_4B + b"\xbb" * 100])  # only 100B post-VPS
     r._decoder = _FakeDecoder()
     await r._pump_upstream()
     assert r._keyframe_seen.is_set() is False

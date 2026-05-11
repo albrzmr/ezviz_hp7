@@ -70,10 +70,20 @@ _POST_CLIENT_GRACE_SECONDS = 5.0
 
 # How long a fresh viewer waits for the pump task to surface a HEVC
 # keyframe (VPS NAL) before being attached anyway.  HP7 / CP7 emit a
-# VPS every ~2-4 s, so a 5 s ceiling tolerates one missed cycle.  On
+# VPS every ~2-4 s, so a ~6 s ceiling tolerates one missed cycle.  On
 # timeout the viewer is attached mid-GOP — the same "grey for a few
 # seconds" behaviour as before this gate existed.
-_KEYFRAME_WAIT_TIMEOUT_SEC = 5.0
+_KEYFRAME_WAIT_TIMEOUT_SEC = 6.0
+
+# Minimum bytes required AFTER the last VPS NAL before we declare a
+# keyframe "complete" enough to flush to a new viewer.  A bare VPS is
+# only a few hundred bytes; an entire IDR slice (the actual decodable
+# I-frame) trails it across several decoded chunks.  Without this we
+# would wake the viewer with just the NAL headers and no slice data
+# — ffmpeg would receive a syntactically-valid handshake but nothing
+# to decode and paint grey until the next keyframe.  32 KB comfortably
+# covers a 2K HEVC I-frame on HP7 / CP7 (observed range ~30-150 KB).
+_KEYFRAME_MIN_TAIL_BYTES = 32 * 1024
 
 
 class CpdMpegPsRelay:
@@ -465,13 +475,21 @@ class CpdMpegPsRelay:
                 if len(self._buffer) > _BUFFER_TRIM_TARGET:
                     self._trim_buffer_to_last_keyframe()
 
-                # Wake any viewers waiting for the first VPS of this
-                # LAN session so they can attach with a keyframe-
-                # aligned burst instead of mid-GOP grey frames.
-                if not self._keyframe_seen.is_set() and (
-                    _HEVC_VPS_4B in plain or _HEVC_VPS_3B in plain
-                ):
-                    self._keyframe_seen.set()
+                # Wake any viewers waiting for the first COMPLETE
+                # keyframe of this LAN session.  A bare VPS NAL is not
+                # enough — the IDR slice that follows arrives across
+                # several decoded chunks.  We gate on "buffer has at
+                # least ``_KEYFRAME_MIN_TAIL_BYTES`` after the last
+                # VPS" so the viewer wakes up with a full I-frame
+                # behind it, not just headers.
+                if not self._keyframe_seen.is_set():
+                    buf = bytes(self._buffer)
+                    last_vps = max(buf.rfind(_HEVC_VPS_4B), buf.rfind(_HEVC_VPS_3B))
+                    if (
+                        last_vps >= 0
+                        and len(buf) - last_vps >= _KEYFRAME_MIN_TAIL_BYTES
+                    ):
+                        self._keyframe_seen.set()
 
                 # If a writer is attached, forward the new chunk live.
                 writer = self._writer
