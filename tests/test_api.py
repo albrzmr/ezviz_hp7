@@ -10,16 +10,19 @@ from __future__ import annotations
 
 import logging
 import time
+from unittest.mock import MagicMock
 
 import pytest
 from pyezvizapi.exceptions import PyEzvizError
 
 from custom_components.ezviz_hp7 import api as api_mod
 from custom_components.ezviz_hp7.api import (
+    DEFAULT_ALARM_PIC_URL,
     DEFAULT_DOOR_LOCK_NO,
     DEFAULT_GATE_LOCK_NO,
     REGION_URLS,
     Hp7Api,
+    Hp7EzvizCamera,
 )
 from custom_components.ezviz_hp7.stats import ActivityStats
 
@@ -441,8 +444,8 @@ def test_unlock_gate_uses_lock_no_1(patched_api) -> None:
 
 
 def _set_static_status_payload(payload: dict) -> None:
-    """Helper: ``EzvizCamera.status(refresh=False)`` returns ``payload``."""
-    api_mod.EzvizCamera.return_value.status.return_value = payload
+    """Helper: ``Hp7EzvizCamera.status_static_dict()`` returns ``payload``."""
+    api_mod.Hp7EzvizCamera.return_value.status_static_dict.return_value = payload
 
 
 def test_get_static_status_raises_when_client_uninitialised(monkeypatch) -> None:
@@ -503,21 +506,25 @@ def test_get_static_status_local_rtsp_port_defaults_to_554(patched_api) -> None:
 
 
 def test_get_static_status_does_not_request_alarm_refresh(patched_api) -> None:
-    """``camera.status`` must be called with ``refresh=False`` to skip
-    the inner ``unifiedmsg/list`` HTTP request."""
+    """Static poll routes through ``status_static_dict``, which builds
+    the dict from ``device_obj`` without touching ``unifiedmsg/list``.
+    Verifies upstream's variadic ``status(...)`` is never called — the
+    whole point of bypassing it is to be pyezvizapi-version-agnostic."""
     _set_static_status_payload({"name": "D", "WIFI": {}})
     patched_api.get_static_status("SER")
-    api_mod.EzvizCamera.return_value.status.assert_called_once_with(refresh=False)
+    cam = api_mod.Hp7EzvizCamera.return_value
+    cam.status_static_dict.assert_called_once_with()
+    cam.status.assert_not_called()
 
 
 # ── get_alarms (phase 6.1 split) ──────────────────────────────────
 
 
 def _set_alarms_payload(payload: dict) -> None:
-    """Helper: ``EzvizCamera.status(refresh=True, latest_alarm=...)``
-    returns ``payload`` (which carries the alarm fields and possibly
+    """Helper: ``Hp7EzvizCamera.status_alarm_dict(latest_alarm)`` returns
+    ``payload`` (which carries the alarm fields and possibly
     ``Seconds_Last_Trigger``)."""
-    api_mod.EzvizCamera.return_value.status.return_value = payload
+    api_mod.Hp7EzvizCamera.return_value.status_alarm_dict.return_value = payload
 
 
 def _set_messages_response(messages: list) -> None:
@@ -581,9 +588,9 @@ def test_get_alarms_ignores_messages_from_other_devices(patched_api) -> None:
         ]
     )
     patched_api.get_alarms("SER")
-    # ``latest_alarm`` passed to ``status`` must be ``None``.
-    _, kwargs = api_mod.EzvizCamera.return_value.status.call_args
-    assert kwargs == {"refresh": True, "latest_alarm": None}
+    # ``latest_alarm`` passed to ``status_alarm_dict`` must be ``None``.
+    args, _ = api_mod.Hp7EzvizCamera.return_value.status_alarm_dict.call_args
+    assert args == (None,)
 
 
 def test_get_alarms_handles_empty_message_list(patched_api) -> None:
@@ -609,15 +616,133 @@ def test_get_alarms_handles_messages_key_variant(patched_api) -> None:
     assert out["alarm_name"] == "Ring"
 
 
-def test_get_alarms_creates_camera_with_empty_device_obj(patched_api) -> None:
-    """The camera helper must be instantiated with ``device_obj={}`` so
-    no second pagelist HTTP request is issued under the hood."""
+def test_get_alarms_creates_camera_with_offline_device_obj(patched_api) -> None:
+    """The camera helper must be instantiated with a non-empty but
+    minimal ``device_obj`` so older pyezvizapi versions (which treat
+    a falsy ``device_obj`` as "go fetch pagelist") don't issue a second
+    HTTP request under the hood.  ``{"SWITCH": []}`` is the smallest
+    payload that's truthy and satisfies legacy ``_switch`` parsing."""
     _set_alarms_payload({"Seconds_Last_Trigger": None})
     _set_messages_response([{"deviceSerial": "SER", "title": "x"}])
     patched_api.get_alarms("SER")
-    args, kwargs = api_mod.EzvizCamera.call_args
+    args, kwargs = api_mod.Hp7EzvizCamera.call_args
     assert args == (patched_api._client, "SER")
-    assert kwargs == {"device_obj": {}}
+    assert kwargs == {"device_obj": {"SWITCH": []}}
+
+
+# ── Hp7EzvizCamera (real subclass, no mocks) ──────────────────────
+#
+# These tests exercise the actual subclass against the installed
+# pyezvizapi to catch breakage from upstream signature changes —
+# the entire reason for the subclass exists.
+
+
+def _make_camera(device_obj: dict) -> Hp7EzvizCamera:
+    """Build a real ``Hp7EzvizCamera`` with a stub client.
+
+    The client is only touched by paths we don't hit here (alarm
+    fetch, ptz, etc.); ``MagicMock`` is enough.
+    """
+    return Hp7EzvizCamera(MagicMock(), "SERIAL", device_obj=device_obj)
+
+
+def test_hp7_camera_status_static_dict_extracts_pagelist_fields() -> None:
+    cam = _make_camera(
+        {
+            "deviceInfos": {
+                "name": "Doorbell",
+                "version": "V5.3.6 build 250825",
+                "status": 1,
+            },
+            "UPGRADE": {"isNeedUpgrade": 0},
+            "CONNECTION": {"netIp": "203.0.113.1", "localRtspPort": "8554"},
+            "WIFI": {"ssid": "Casa", "signal": 80, "address": "192.168.1.10"},
+            "SWITCH": [],
+        }
+    )
+    out = cam.status_static_dict()
+    assert out == {
+        "name": "Doorbell",
+        "version": "V5.3.6 build 250825",
+        "upgrade_available": False,
+        "status": 1,
+        "wan_ip": "203.0.113.1",
+        "WIFI": {"ssid": "Casa", "signal": 80, "address": "192.168.1.10"},
+        "local_ip": "192.168.1.10",
+        "local_rtsp_port": "8554",
+    }
+
+
+def test_hp7_camera_status_static_dict_normalises_zero_rtsp_port() -> None:
+    """Some devices report ``localRtspPort = 0`` (or "0"); upstream
+    treats those as "unset" and falls back to 554.  We do the same."""
+    cam = _make_camera(
+        {
+            "deviceInfos": {},
+            "UPGRADE": {},
+            "CONNECTION": {"localRtspPort": 0},
+            "SWITCH": [],
+        }
+    )
+    assert cam.status_static_dict()["local_rtsp_port"] == "554"
+
+
+def test_hp7_camera_status_static_dict_upgrade_available_when_status_3() -> None:
+    cam = _make_camera({"UPGRADE": {"isNeedUpgrade": 3}, "SWITCH": []})
+    assert cam.status_static_dict()["upgrade_available"] is True
+
+
+def test_hp7_camera_status_alarm_dict_with_prefetched_alarm() -> None:
+    """A fresh alarm (timestamp <60s ago) populates all four fields and
+    a non-None ``Seconds_Last_Trigger``."""
+    import datetime as _dt
+
+    now_str = _dt.datetime.now().replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+    cam = _make_camera({"SWITCH": []})
+    out = cam.status_alarm_dict(
+        {
+            "alarmStartTimeStr": now_str,
+            "picUrl": "https://x/snap.jpg",
+            "sampleName": "Doorbell ring",
+        }
+    )
+    assert out["last_alarm_time"] == now_str
+    assert out["last_alarm_pic"] == "https://x/snap.jpg"
+    assert out["last_alarm_type_name"] == "Doorbell ring"
+    # ``timepassed`` is in seconds and should be small (just-now).
+    assert out["Seconds_Last_Trigger"] is not None
+    assert out["Seconds_Last_Trigger"] < 5
+
+
+def test_hp7_camera_status_alarm_dict_with_none_alarm() -> None:
+    """No prefetched alarm → all four fields take defaults and
+    ``Seconds_Last_Trigger`` stays ``None`` (no motion)."""
+    cam = _make_camera({"SWITCH": []})
+    out = cam.status_alarm_dict(None)
+    assert out == {
+        "Seconds_Last_Trigger": None,
+        "last_alarm_time": None,
+        "last_alarm_pic": DEFAULT_ALARM_PIC_URL,
+        "last_alarm_type_name": "NoAlarm",
+    }
+
+
+def test_hp7_camera_status_alarm_dict_swallows_unparseable_timestamp() -> None:
+    """Upstream's ``_motion_trigger`` parses ``alarmStartTimeStr`` with a
+    strict format; if the cloud ever sends a variant we don't know
+    about, we must NOT fail the whole poll — the alarm dict has to
+    come back populated even when the motion-timing math gives up."""
+    cam = _make_camera({"SWITCH": []})
+    out = cam.status_alarm_dict({"alarmStartTimeStr": "garbage"})
+    # No crash; the raw timestamp string is preserved for the entity,
+    # and the rest of the dict still has its four keys.
+    assert out["last_alarm_time"] == "garbage"
+    assert set(out.keys()) == {
+        "Seconds_Last_Trigger",
+        "last_alarm_time",
+        "last_alarm_pic",
+        "last_alarm_type_name",
+    }
 
 
 # ── close ──────────────────────────────────────────────────────────

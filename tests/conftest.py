@@ -150,6 +150,7 @@ def patched_api(mocker, monkeypatch, fake_token: dict):
     """
     mocker.patch("custom_components.ezviz_hp7.api.EzvizClient")
     mocker.patch("custom_components.ezviz_hp7.api.EzvizCamera")
+    mocker.patch("custom_components.ezviz_hp7.api.Hp7EzvizCamera")
     mocker.patch("custom_components.ezviz_hp7.api.EzvizCAS")
 
     # Snapshot the pyezvizapi globals so ``_apply_feature_code`` calls
