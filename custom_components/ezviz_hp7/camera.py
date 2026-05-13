@@ -116,6 +116,17 @@ class Hp7Camera(Camera, CoordinatorEntity):
             return False
         return self._relay.has_active_viewer or self._relay.is_warm
 
+    async def async_added_to_hass(self) -> None:
+        """Subscribe to relay state transitions so HA re-evaluates ``state``."""
+        await super().async_added_to_hass()
+        if self._relay is not None:
+            self._relay.set_state_listener(self.async_write_ha_state)
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._relay is not None:
+            self._relay.set_state_listener(None)
+        await super().async_will_remove_from_hass()
+
     @property
     def available(self) -> bool:
         """Camera is available whenever the doorbell is online and reachable.

@@ -108,6 +108,12 @@ class CpdMpegPsRelay:
         self._server: asyncio.base_events.Server | None = None
         self._port: int = 0
 
+        # Fired whenever ``has_active_viewer`` or ``is_warm`` changes so
+        # the camera entity can push a fresh state to the frontend (the
+        # ``Camera.state`` machinery is pull-only and won't notice the
+        # transition otherwise — see ``Hp7Camera.async_added_to_hass``).
+        self._state_listener: Callable[[], None] | None = None
+
         # Upstream-session state.  All of these are owned by the
         # asyncio event loop; we serialise writes to them with
         # ``_state_lock`` so that ``async_prewarm`` and ``_handle_client``
@@ -158,6 +164,19 @@ class CpdMpegPsRelay:
         attached) from full-cold (no upstream at all).
         """
         return self._is_pump_alive()
+
+    def set_state_listener(self, callback: Callable[[], None] | None) -> None:
+        """Register a 0-arg callable invoked on viewer-attach / warm-up transitions."""
+        self._state_listener = callback
+
+    def _notify_state_change(self) -> None:
+        cb = self._state_listener
+        if cb is None:
+            return
+        try:
+            cb()
+        except Exception as exc:
+            _LOGGER.debug("relay state listener raised: %s", exc)
 
     async def async_start(self) -> None:
         if self._server is not None:
@@ -323,12 +342,17 @@ class CpdMpegPsRelay:
                     return
             async with self._state_lock:
                 self._writer = writer
+            self._notify_state_change()
             await self._wait_for_client_eof(reader)
         finally:
+            detached_here = False
             async with self._state_lock:
                 if self._writer is writer:
                     self._writer = None
+                    detached_here = True
                     self._reschedule_close(_POST_CLIENT_GRACE_SECONDS)
+            if detached_here:
+                self._notify_state_change()
             try:
                 writer.close()
                 await writer.wait_closed()
@@ -405,6 +429,7 @@ class CpdMpegPsRelay:
             related,
             (time.monotonic() - t0) * 1000,
         )
+        self._notify_state_change()
 
     async def _teardown_upstream(self) -> None:
         """Cancel the pump task and close the LAN session.
@@ -450,6 +475,7 @@ class CpdMpegPsRelay:
             )
             self._session_started_at = 0.0
             self._session_bytes = 0
+        self._notify_state_change()
 
     async def _pump_upstream(self) -> None:
         """Read encrypted bytes, decrypt, push to the buffer + active writer."""
@@ -501,6 +527,7 @@ class CpdMpegPsRelay:
                         _LOGGER.info("CPD7 relay: writer closed mid-pump")
                         if self._writer is writer:
                             self._writer = None
+                            self._notify_state_change()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
