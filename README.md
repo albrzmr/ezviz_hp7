@@ -204,6 +204,18 @@ action:
   black even though the stream is healthy.  Workarounds: view from
   Safari / iOS / Companion app, or add a HEVC→H.264 transcoding step in
   the relay.
+- **Video Encryption / Image Encryption mode is not supported yet.**  When
+  enabled in the EZVIZ app (Indoor Display → Privacy → Video Encryption),
+  the camera wraps the stream with a verification-code-derived layer the
+  integration does not yet decode.  Symptom: control plane succeeds but
+  zero plaintext bytes ever arrive.  Workaround: turn the toggle OFF on
+  the indoor display; check the auto-generated entity
+  ``binary_sensor.<your-cp7>_video_encryption_enabled`` to confirm.
+- **Legacy NetSDK firmware (port 8000) is not supported.**  A few older
+  HP7 / CP7 firmware variants only expose the legacy Hikvision NetSDK
+  on TCP 8000 instead of the modern CPD7 path on 9010/9020.  Symptom:
+  `[Errno 111] Connection refused` on the LAN start.  No workaround
+  from the integration side today.
 - **One HP7 per config entry.**  Multi-device support is planned but not
   required for typical setups (just add the integration once per device).
 - **Lock unlocks are issued via cloud.**  When the cloud is unreachable
@@ -211,34 +223,119 @@ action:
 
 ---
 
+## Network requirements
+
+The integration opens a direct TCP connection from Home Assistant to
+the doorbell on **port 9010** (control) and **port 9020** (stream)
+on the doorbell's LAN IP.  No proxies, no port forwarding, no relay
+servers.  This means:
+
+- **HA and the doorbell must share an L3-routable path** to that LAN IP.
+  Easiest setup: HA and the doorbell on the same VLAN / subnet.
+- **HA running in Docker**: use `network_mode: host` if possible.  If
+  you use a custom bridge, make sure that bridge actually has a route
+  to the doorbell's LAN (verify with
+  `docker exec -it <ha-container> ping <doorbell-ip>` ).  A bridge in
+  a NAT-only Docker network will not reach the doorbell.
+- **VLANs with stateful inspection** typically work for the small
+  control-plane packets (INIT/INVITE/PLAY) and then *silently drop*
+  the sustained stream — you will see the LAN session open and then
+  no bytes arrive.  Either move HA into the same VLAN as the doorbell
+  or add an explicit allow rule for the doorbell IP to HA on port 9020.
+
+If your setup involves Docker bridges, multiple VLANs or a router
+between HA and the doorbell, please verify routing with `ping` first
+before opening an issue.
+
+---
+
 ## Troubleshooting
 
-Enable debug logging if the camera doesn't stream:
+### Enable detailed logs
+
+Add this to your `configuration.yaml` and reload (or restart) Home
+Assistant before reproducing the issue:
 
 ```yaml
 # configuration.yaml
 logger:
+  default: info
   logs:
     custom_components.ezviz_hp7: debug
+    custom_components.ezviz_hp7.api: debug
+    custom_components.ezviz_hp7.tcp_relay: debug
+    custom_components.ezviz_hp7.cpd7.lan_client: debug
+    custom_components.ezviz_hp7.cpd7.decoder: debug
+    custom_components.ezviz_hp7.pylocalapi.cas: debug
+    custom_components.ezviz_hp7.mjpeg: debug
     homeassistant.components.stream: debug
 ```
 
-Useful log markers:
+You can also enable / disable individual loggers at runtime from
+**Developer Tools → Services → `logger.set_level`** without editing
+the YAML.
 
-- `CPD7 relay listening on 127.0.0.1:NNNN` — local relay started.
-- `[RELAY] client connected from ...` — HA Stream worker connected.
-- `CPD7 decoder: ChaCha20 key derived` (DEBUG) — LAN handshake
-  completed; encrypted bytes can now be decoded.
-- `CPD7 decoder: keyframe found at +N ... stream synced` (DEBUG) —
-  first video keyframe seen, bytes are flowing to ffmpeg.
-- `[libav.hevc] PPS id out of range` (repeated) — keyframe sync
-  failed (open an issue with the surrounding log).
+After reproducing the issue, grab the log from
+**Settings → System → Logs → Download Full Log** (or
+`/config/home-assistant.log`).  Filtering by
+`ezviz_hp7|RELAY|MJPEG|CPD7|EZVIZ-AES|P2P-REG` already shows
+everything relevant.
 
-The integration also emits a one-line activity summary every 5
-minutes (``EZVIZ HP7 stats (uptime=...): {...}``).  Grepping for
-``EZVIZ HP7 stats`` in the log is a quick way to inspect cloud-poll
+### Reading the log — what each marker means
+
+The relay emits a small set of distinctive markers that, taken
+together, tell you exactly which step failed:
+
+- `[SETUP] entry <id> ready (mode=mjpeg|hls, relay=tcp://127.0.0.1:N)` —
+  integration loaded successfully.
+- `[EZVIZ-AES] cache MISS/HIT/forced-refresh for <serial>` followed by
+  `EUCAS fetch OK` — the AES-128 control key for this device was
+  retrieved (or served from cache).
+- `[P2P-REG] POST … -> 200 (N B)` — the per-client cloud registration
+  succeeded.
+- `[RELAY] LAN upstream OPEN host=<ip> related=<sub-serial> (setup=N ms)` —
+  INIT/INVITE/PLAY all succeeded.  At this point the TCP socket to the
+  doorbell is open.
+- `[RELAY] first raw byte from camera after N ms` — the camera started
+  sending data over the LAN.
+- `[RELAY] first plaintext byte after N ms (raw_so_far=NB)` — the
+  ChaCha20 decoder produced its first decrypted chunk; from here on
+  you should see playback.
+- `[MJPEG] session START` … `session END` — the per-viewer ffmpeg
+  process for MJPEG mode.
+
+Periodic activity summary line (every ~5 min):
+`EZVIZ HP7 stats (uptime=...): {…}`.  Grep that to inspect cloud-poll
 counts, AES cache hits, LAN session totals and pre-warm efficacy
 without enabling debug logging.
+
+### Common error patterns
+
+| Symptom in the log | Likely cause | What to do |
+|---|---|---|
+| `LAN start failed: doorbell <ip> is unreachable at the IP layer (EHOSTUNREACH)` | HA cannot reach the doorbell IP at all | Verify the doorbell is powered on and online in the EZVIZ app, then `ping` it from HA's shell / container.  Check Docker bridge routing if applicable. |
+| `LAN start failed: doorbell <ip> reachable but TCP 9010/9020 closed (ECONNREFUSED)` | Legacy NetSDK firmware on port 8000 | Not supported yet.  Please open an issue with your **doorbell model and firmware build** (visible in the EZVIZ app under device details). |
+| `LAN start failed: connection to <ip> timed out (ETIMEDOUT)` | Silent firewall / VLAN ACL between HA and the doorbell | Check VLAN ACLs, allow traffic to ports 9010 and 9020 from HA's IP. |
+| `LAN upstream OPEN … first raw byte after N ms` but **no** `first plaintext byte` for several seconds | Video Encryption silently active on the indoor display, **or** a firmware variant the integration doesn't decrypt yet | Check `binary_sensor.<your-cp7>_video_encryption_enabled`.  If `on`, toggle Video Encryption OFF on the indoor display.  If `off` and it still fails, open an issue with the log. |
+| `No stream bytes received from camera 8.0s after the LAN session opened.` | Doorbell completed control plane but stays silent | Indoor display module offline / cloud-disconnected, or firmware variant we don't yet support.  Verify the indoor display is powered and online. |
+| `Login error: {'code': 1069, …}` (`登录终端已达上限`) | The EZVIZ account has hit the 10-session limit for logged-in terminals | EZVIZ app → Account → Settings → My Profile → Login Settings → Terminal Management → remove unused terminals, then reload the integration. |
+
+### Reporting an issue
+
+If after the above the stream still fails, please open an issue at
+<https://github.com/albrzmr/ezviz_hp7/issues> with the **bug report
+template** (it asks for the right info up front).  Required:
+
+- Doorbell model + firmware build (EZVIZ app → device → settings → about).
+- Integration version (visible in the manifest, also in the HACS card).
+- Home Assistant version + install type (OS, Container, Supervised, Core).
+- A debug log filtered by `ezviz_hp7|RELAY|MJPEG|CPD7|EZVIZ-AES|P2P-REG`
+  spanning from before you opened the stream until ~10 seconds after.
+  **Strip the JWT `sessionId=…` substrings** before pasting.
+- The state of `binary_sensor.<your-cp7>_video_encryption_enabled`.
+
+With those five pieces of info the maintainer can usually triage in a
+single round.
 
 ---
 
