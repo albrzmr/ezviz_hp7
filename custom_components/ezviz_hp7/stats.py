@@ -53,6 +53,12 @@ class ActivityStats:
     lan_sessions_failed: int = 0
     lan_session_total_bytes: int = 0
     lan_session_total_seconds: float = 0.0
+    # Sessions where control plane completed but the camera never emitted
+    # a single stream byte.  Distinct enough from ``lan_sessions_failed``
+    # to deserve its own counter — these point at the device side
+    # (indoor module offline, silent re-enabled encryption, firmware
+    # variant) rather than at a setup error on our side.
+    lan_handshakes_no_payload: int = 0
 
     relay_clients_attached: int = 0
     relay_clients_attached_warm: int = 0  # subset of above that hit a warm session
