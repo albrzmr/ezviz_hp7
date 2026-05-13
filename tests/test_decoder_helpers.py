@@ -14,34 +14,44 @@ from custom_components.ezviz_hp7.cpd7.crypto import (
     transform_nonce,
 )
 from custom_components.ezviz_hp7.cpd7.decoder import (
+    H264_SPS_3B,
+    H264_SPS_4B,
     HEVC_VPS_3B,
     HEVC_VPS_4B,
     MPEG_PS_PACK,
 )
 
-# ── _find_vps ───────────────────────────────────────────────────────
+# ── _find_keyframe ──────────────────────────────────────────────────
 
 
-def test_find_vps_4b_at_start() -> None:
-    assert StreamDecoder._find_vps(HEVC_VPS_4B + b"\x00") == 0
+def test_find_keyframe_hevc_4b_at_start() -> None:
+    assert StreamDecoder._find_keyframe(HEVC_VPS_4B + b"\x00") == 0
 
 
-def test_find_vps_4b_with_prefix() -> None:
-    assert StreamDecoder._find_vps(b"\xaa\xbb" + HEVC_VPS_4B) == 2
+def test_find_keyframe_hevc_4b_with_prefix() -> None:
+    assert StreamDecoder._find_keyframe(b"\xaa\xbb" + HEVC_VPS_4B) == 2
 
 
-def test_find_vps_3b_when_no_4b() -> None:
-    assert StreamDecoder._find_vps(b"\xff\xff" + HEVC_VPS_3B) == 2
+def test_find_keyframe_hevc_3b_when_no_4b() -> None:
+    assert StreamDecoder._find_keyframe(b"\xff\xff" + HEVC_VPS_3B) == 2
 
 
-def test_find_vps_prefers_earlier_marker() -> None:
-    # 4-byte VPS at offset 4, 3-byte VPS later — return the earlier one.
-    buf = b"\x00" * 4 + HEVC_VPS_4B + b"\xff" * 8 + HEVC_VPS_3B
-    assert StreamDecoder._find_vps(buf) == 4
+def test_find_keyframe_h264_4b_at_start() -> None:
+    assert StreamDecoder._find_keyframe(H264_SPS_4B + b"\x00") == 0
 
 
-def test_find_vps_returns_minus_one_when_absent() -> None:
-    assert StreamDecoder._find_vps(b"\x00\x00\x00\x00\x00\x00") == -1
+def test_find_keyframe_h264_3b_with_prefix() -> None:
+    assert StreamDecoder._find_keyframe(b"\xaa\xbb" + H264_SPS_3B) == 2
+
+
+def test_find_keyframe_prefers_earlier_marker() -> None:
+    # HEVC VPS at offset 4, H.264 SPS later — return the earlier one.
+    buf = b"\x00" * 4 + HEVC_VPS_4B + b"\xff" * 8 + H264_SPS_4B
+    assert StreamDecoder._find_keyframe(buf) == 4
+
+
+def test_find_keyframe_returns_minus_one_when_absent() -> None:
+    assert StreamDecoder._find_keyframe(b"\x00\x00\x00\x00\x00\x00") == -1
 
 
 # ── nonce transform (transform_nonce + make_nonce_12b) ─────────────
