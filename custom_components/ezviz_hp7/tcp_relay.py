@@ -52,11 +52,25 @@ KeyFetcher = Callable[[], Awaitable[bytes]]
 # start for any realistic prewarm-to-connect window.
 _BUFFER_TRIM_TARGET = 4 * 1024 * 1024
 
-# Markers used for keyframe-aligned trimming.  Both must match the
-# patterns the StreamDecoder gates on (see cpd7/decoder.py).
+# Markers used for keyframe-aligned trimming.  Must match the patterns
+# the StreamDecoder gates on (see cpd7/decoder.py).  HEVC VPS for CP7 /
+# newer HP7; H.264 SPS for older HP7 firmware.
 _HEVC_VPS_4B = b"\x00\x00\x00\x01\x40\x01"
 _HEVC_VPS_3B = b"\x00\x00\x01\x40\x01"
+_H264_SPS_4B = b"\x00\x00\x00\x01\x67"
+_H264_SPS_3B = b"\x00\x00\x01\x67"
 _MPEG_PS_PACK = b"\x00\x00\x01\xba"
+
+
+def _rfind_last_keyframe(buf: bytes) -> int:
+    """Return the offset of the last HEVC VPS or H.264 SPS in ``buf``."""
+    return max(
+        buf.rfind(_HEVC_VPS_4B),
+        buf.rfind(_HEVC_VPS_3B),
+        buf.rfind(_H264_SPS_4B),
+        buf.rfind(_H264_SPS_3B),
+    )
+
 
 # How long to keep a warm session running with no client attached
 # before tearing it down.  60 s comfortably covers the time between a
@@ -615,11 +629,8 @@ class CpdMpegPsRelay:
                 # behind it, not just headers.
                 if not self._keyframe_seen.is_set():
                     buf = bytes(self._buffer)
-                    last_vps = max(buf.rfind(_HEVC_VPS_4B), buf.rfind(_HEVC_VPS_3B))
-                    if (
-                        last_vps >= 0
-                        and len(buf) - last_vps >= _KEYFRAME_MIN_TAIL_BYTES
-                    ):
+                    last_kf = _rfind_last_keyframe(buf)
+                    if last_kf >= 0 and len(buf) - last_kf >= _KEYFRAME_MIN_TAIL_BYTES:
                         self._keyframe_seen.set()
 
                 # If a writer is attached, forward the new chunk live.
@@ -650,25 +661,25 @@ class CpdMpegPsRelay:
 
         Falls back to the whole buffer if no keyframe pattern is
         present (which shouldn't happen — the StreamDecoder already
-        gates output on the first VPS).
+        gates output on the first keyframe).
         """
         if not self._buffer:
             return b""
         b = bytes(self._buffer)
-        last_vps = max(b.rfind(_HEVC_VPS_4B), b.rfind(_HEVC_VPS_3B))
-        if last_vps < 0:
+        last_kf = _rfind_last_keyframe(b)
+        if last_kf < 0:
             return b
-        pack = b.rfind(_MPEG_PS_PACK, 0, last_vps)
-        start = pack if pack >= 0 else last_vps
+        pack = b.rfind(_MPEG_PS_PACK, 0, last_kf)
+        start = pack if pack >= 0 else last_kf
         return b[start:]
 
     def _trim_buffer_to_last_keyframe(self) -> None:
         b = bytes(self._buffer)
-        last_vps = max(b.rfind(_HEVC_VPS_4B), b.rfind(_HEVC_VPS_3B))
-        if last_vps < 1024:
+        last_kf = _rfind_last_keyframe(b)
+        if last_kf < 1024:
             return
-        pack = b.rfind(_MPEG_PS_PACK, 0, last_vps)
-        start = pack if pack >= 0 else last_vps
+        pack = b.rfind(_MPEG_PS_PACK, 0, last_kf)
+        start = pack if pack >= 0 else last_kf
         if start > 0:
             del self._buffer[:start]
 

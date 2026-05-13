@@ -14,11 +14,11 @@ Subsequent chunks (chan = 0x01): payload starts with a 4-byte outer
 prefix, then an inner ``$\x02`` ECDH DATA packet whose body is
 ChaCha20-encrypted plaintext (HEVC + audio inside MPEG-PS).
 """
+
 from __future__ import annotations
 
 import logging
 import struct
-from typing import Optional
 
 from Crypto.Cipher import ChaCha20
 from cryptography.hazmat.primitives import serialization
@@ -27,7 +27,6 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from .crypto import transform_nonce
 
-
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -35,16 +34,22 @@ HMAC_TRAILER_SIZE = 32
 MPEG_PS_PACK = b"\x00\x00\x01\xba"
 
 # HEVC VPS NAL start code with NAL header byte 0x40 (NAL type 32 = VPS) and
-# byte 0x01 (layer 0, temporal_id_plus1 = 1).  This marks the beginning of
-# every keyframe sequence on the HP7/CP7 doorbell, normally followed by SPS,
-# PPS and an IDR picture.  Both 4- and 3-byte start codes are valid in HEVC.
+# byte 0x01 (layer 0, temporal_id_plus1 = 1).  CP7 and newer HP7 firmware
+# emit HEVC; both 4- and 3-byte start codes are valid.
 HEVC_VPS_4B = b"\x00\x00\x00\x01\x40\x01"
 HEVC_VPS_3B = b"\x00\x00\x01\x40\x01"
 
+# H.264 SPS NAL: first byte 0x67 = forbidden=0, nal_ref_idc=3, nal_type=7
+# (Sequence Parameter Set).  Older HP7 firmware streams H.264 instead of
+# HEVC; the camera does not advertise the codec in INVITE, so we detect
+# either keyframe marker downstream.
+H264_SPS_4B = b"\x00\x00\x00\x01\x67"
+H264_SPS_3B = b"\x00\x00\x01\x67"
+
 # Hard cap on the pre-keyframe buffer.  At ~150 KB/s the doorbell sends
 # keyframes well within ~2 seconds, so a couple of MB is plenty.  If we
-# blow past this without seeing a VPS we emit anyway so the stream never
-# truly stalls.
+# blow past this without seeing a keyframe we emit anyway so the stream
+# never truly stalls.
 MAX_PRE_KEYFRAME_BUF = 2 * 1024 * 1024
 
 
@@ -68,15 +73,16 @@ class StreamDecoder:
     def __init__(self, ecdh_priv) -> None:
         self._priv = ecdh_priv
         self._buf = bytearray()
-        self._chacha20_key: Optional[bytes] = None
+        self._chacha20_key: bytes | None = None
         self._first_chunk_consumed = False
+        self._first_decrypt_logged = False
         self._mpeg_started = False
         # Pre-keyframe accumulator.  We hold plaintext here until we spot
-        # the first HEVC VPS, then emit starting from the most recent
-        # MPEG-PS pack header before the VPS — this gives the downstream
-        # decoder a clean ``VPS+SPS+PPS+IDR`` sequence at offset 0 instead
-        # of a mid-frame join (which makes PyAV bail out with
-        # ``PPS id out of range``).
+        # the first HEVC VPS (or H.264 SPS), then emit starting from the
+        # most recent MPEG-PS pack header before the keyframe — this gives
+        # the downstream decoder a clean parameter-set + IDR sequence at
+        # offset 0 instead of a mid-frame join (which makes PyAV bail out
+        # with ``PPS id out of range``).
         self._pending = bytearray()
         self._out = bytearray()
 
@@ -144,12 +150,10 @@ class StreamDecoder:
             )
         pkt = chunk0[off:]
         if len(pkt) < 0x2B + 91:
-            raise RuntimeError(
-                f"handshake packet too short: {len(pkt)}B"
-            )
+            raise RuntimeError(f"handshake packet too short: {len(pkt)}B")
         header_len = pkt[2]
-        encrypted_key = pkt[0x0B + header_len: 0x0B + header_len + 32]
-        peer_pub = pkt[0x2B + header_len: 0x2B + header_len + 91]
+        encrypted_key = pkt[0x0B + header_len : 0x0B + header_len + 32]
+        peer_pub = pkt[0x2B + header_len : 0x2B + header_len + 91]
 
         peer = serialization.load_der_public_key(peer_pub)
         shared = self._priv.exchange(ec.ECDH(), peer)
@@ -161,7 +165,8 @@ class StreamDecoder:
         self._chacha20_key = chacha20_key
         _LOGGER.debug(
             "CPD7 decoder: ChaCha20 key derived (shared=%s..., key=%s...)",
-            shared.hex()[:16], chacha20_key.hex()[:16],
+            shared.hex()[:16],
+            chacha20_key.hex()[:16],
         )
 
     def _decrypt_data_chunk(self, chunk: bytes) -> bytes:
@@ -169,7 +174,7 @@ class StreamDecoder:
             return b""
         if self._chacha20_key is None:
             return b""
-        pkt = chunk[4:]                          # skip 4-byte outer prefix
+        pkt = chunk[4:]  # skip 4-byte outer prefix
         if pkt[:2] != b"\x24\x02":
             return b""
         if len(pkt) < 0x0B + HMAC_TRAILER_SIZE:
@@ -177,19 +182,35 @@ class StreamDecoder:
         nonce_12 = _nonce_12b(pkt[7:11])
         body = pkt[0x0B:-HMAC_TRAILER_SIZE]
         try:
-            return ChaCha20.new(key=self._chacha20_key, nonce=nonce_12).decrypt(body)
+            plain = ChaCha20.new(key=self._chacha20_key, nonce=nonce_12).decrypt(body)
         except Exception as exc:
             _LOGGER.debug("ChaCha20 decrypt failed: %s", exc)
             return b""
+        if not self._first_decrypt_logged and plain:
+            self._first_decrypt_logged = True
+            _LOGGER.info(
+                "CPD7 decoder: first decrypted chunk %dB head=%s",
+                len(plain),
+                plain[:64].hex(),
+            )
+        return plain
 
     @staticmethod
-    def _find_vps(buf: bytes) -> int:
-        """Return the offset of the first HEVC VPS NAL in ``buf``, or -1."""
-        off4 = buf.find(HEVC_VPS_4B)
-        off3 = buf.find(HEVC_VPS_3B)
-        if off4 >= 0 and (off3 < 0 or off4 <= off3):
-            return off4
-        return off3
+    def _find_keyframe(buf: bytes) -> int:
+        """Return the offset of the first keyframe marker in ``buf``, or -1.
+
+        Accepts either HEVC VPS (CP7 / newer HP7) or H.264 SPS (older HP7
+        firmware).  The HP7/CP7 firmware does not advertise the codec on
+        the INVITE response, so we match either marker.
+        """
+        candidates = [
+            buf.find(HEVC_VPS_4B),
+            buf.find(HEVC_VPS_3B),
+            buf.find(H264_SPS_4B),
+            buf.find(H264_SPS_3B),
+        ]
+        candidates = [c for c in candidates if c >= 0]
+        return min(candidates) if candidates else -1
 
     def _absorb_plain(self, plain: bytes) -> None:
         if self._mpeg_started:
@@ -198,20 +219,22 @@ class StreamDecoder:
 
         self._pending.extend(plain)
         buf = bytes(self._pending)
-        vps_off = self._find_vps(buf)
-        if vps_off >= 0:
-            # Found VPS — emit from the MPEG-PS pack that precedes it (so
-            # ffmpeg gets a clean PS framing) all the way through.  If no
-            # pack header is found before the VPS, fall back to emitting
-            # from the VPS itself.
-            pack_off = buf.rfind(MPEG_PS_PACK, 0, vps_off)
-            start = pack_off if pack_off >= 0 else vps_off
+        kf_off = self._find_keyframe(buf)
+        if kf_off >= 0:
+            # Found keyframe (HEVC VPS or H.264 SPS) — emit from the
+            # MPEG-PS pack that precedes it (so ffmpeg gets a clean PS
+            # framing) all the way through.  If no pack header is found
+            # before the keyframe, fall back to emitting from the
+            # keyframe itself.
+            pack_off = buf.rfind(MPEG_PS_PACK, 0, kf_off)
+            start = pack_off if pack_off >= 0 else kf_off
             self._mpeg_started = True
             self._out.extend(buf[start:])
             self._pending.clear()
             _LOGGER.debug(
                 "CPD7 decoder: keyframe found at +%d (pack@%d) — stream synced",
-                vps_off, pack_off,
+                kf_off,
+                pack_off,
             )
             return
 
