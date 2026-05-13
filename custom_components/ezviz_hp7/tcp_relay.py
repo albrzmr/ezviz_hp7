@@ -94,6 +94,53 @@ _KEYFRAME_MIN_TAIL_BYTES = 32 * 1024
 _NO_PAYLOAD_WARN_SECONDS = 8.0
 
 
+def _log_connect_error(host: str, exc: OSError) -> None:
+    """Emit an actionable WARNING tailored to the OSError errno code.
+
+    The three most common errnos seen during LAN start each point at a
+    very different problem.  A generic "LAN start FAILED" line forces
+    the user (or the maintainer triaging an issue) to know POSIX errno
+    by heart; emitting one targeted message per code makes the cause
+    self-evident in the log.
+    """
+    errno = exc.errno
+    if errno == 113:  # EHOSTUNREACH
+        _LOGGER.warning(
+            "[RELAY] LAN start failed: doorbell %s is unreachable at the "
+            "IP layer (EHOSTUNREACH). The integration could not even open "
+            "a TCP connection to the device. Check that (a) the doorbell "
+            "is powered on and online in the EZVIZ app, (b) HA can ping "
+            "the doorbell IP, (c) if HA runs in Docker, that its network "
+            "actually reaches the doorbell's LAN (host network or a "
+            "bridge with a route).",
+            host,
+        )
+    elif errno == 111:  # ECONNREFUSED
+        _LOGGER.warning(
+            "[RELAY] LAN start failed: doorbell %s reachable but TCP "
+            "9010/9020 closed (ECONNREFUSED). Likely a firmware variant "
+            "still on the legacy NetSDK path (port 8000), which this "
+            "integration does not yet support. The official EZVIZ app "
+            "may work locally because it falls back to that path.",
+            host,
+        )
+    elif errno == 110:  # ETIMEDOUT
+        _LOGGER.warning(
+            "[RELAY] LAN start failed: connection to doorbell %s timed "
+            "out (ETIMEDOUT). The device IP responds to ARP but the TCP "
+            "handshake never completes — typically a firewall / VLAN "
+            "ACL silently dropping packets.",
+            host,
+        )
+    else:
+        _LOGGER.warning(
+            "[RELAY] LAN start failed for doorbell %s: %s (errno=%s)",
+            host,
+            exc,
+            errno,
+        )
+
+
 class CpdMpegPsRelay:
     """Localhost TCP relay with at most one active upstream LAN session."""
 
@@ -418,7 +465,11 @@ class CpdMpegPsRelay:
             aes_key=aes_key,
         )
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lan.start)
+        try:
+            await loop.run_in_executor(None, lan.start)
+        except OSError as exc:
+            _log_connect_error(host, exc)
+            raise
 
         self._lan = lan
         self._decoder = StreamDecoder(lan.ecdh_priv)
