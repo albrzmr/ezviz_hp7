@@ -85,6 +85,14 @@ _KEYFRAME_WAIT_TIMEOUT_SEC = 6.0
 # covers a 2K HEVC I-frame on HP7 / CP7 (observed range ~30-150 KB).
 _KEYFRAME_MIN_TAIL_BYTES = 32 * 1024
 
+# Time the pump task waits for the first raw byte from the camera before
+# emitting an actionable WARNING.  Healthy HP7 / CP7 firmware send the
+# IMKH handshake within ~100 ms; if 8 s pass with nothing on the wire
+# the device almost certainly has a problem the integration cannot fix
+# (indoor module offline, silent encryption toggle, firmware variant)
+# and the user benefits from a clear pointer in the log.
+_NO_PAYLOAD_WARN_SECONDS = 8.0
+
 
 class CpdMpegPsRelay:
     """Localhost TCP relay with at most one active upstream LAN session."""
@@ -484,16 +492,62 @@ class CpdMpegPsRelay:
         decoder = self._decoder
         if lan is None or decoder is None:
             return
+
+        pump_started = time.monotonic()
+        raw_bytes_total = 0
+        first_raw_at: float | None = None
+        first_plain_at: float | None = None
+
+        async def _warn_no_raw_bytes() -> None:
+            await asyncio.sleep(_NO_PAYLOAD_WARN_SECONDS)
+            if raw_bytes_total > 0:
+                return
+            _LOGGER.warning(
+                "[RELAY] No stream bytes received from camera %ss after the LAN "
+                "session opened. Control plane (INIT/INVITE/PLAY) succeeded but "
+                "the device is silent. Likely causes: (a) indoor display offline "
+                "or unreachable from the cloud, (b) Video Encryption silently "
+                "re-enabled on the indoor display (check the device's "
+                "video_encryption_enabled binary sensor), (c) firmware variant "
+                "we do not yet support, (d) network ACL/VLAN filter dropping "
+                "bulk TCP from the doorbell to HA.",
+                _NO_PAYLOAD_WARN_SECONDS,
+            )
+            if self._stats is not None:
+                self._stats.lan_handshakes_no_payload += 1
+
+        watchdog: asyncio.Task | None = asyncio.create_task(_warn_no_raw_bytes())
+
         try:
             while True:
                 raw = await loop.run_in_executor(None, lan.read_chunk)
                 if not raw:
-                    _LOGGER.info("CPD7 relay: upstream EOF")
+                    _LOGGER.info(
+                        "CPD7 relay: upstream EOF (raw_bytes_total=%dB)",
+                        raw_bytes_total,
+                    )
                     break
+                if first_raw_at is None:
+                    first_raw_at = time.monotonic()
+                    _LOGGER.info(
+                        "[RELAY] first raw byte from camera after %.0f ms",
+                        (first_raw_at - pump_started) * 1000,
+                    )
+                    if watchdog is not None:
+                        watchdog.cancel()
+                        watchdog = None
+                raw_bytes_total += len(raw)
                 decoder.feed(raw)
                 plain = decoder.take()
                 if not plain:
                     continue
+                if first_plain_at is None:
+                    first_plain_at = time.monotonic()
+                    _LOGGER.info(
+                        "[RELAY] first plaintext byte after %.0f ms (raw_so_far=%dB)",
+                        (first_plain_at - pump_started) * 1000,
+                        raw_bytes_total,
+                    )
 
                 # Keep the buffer trimmed at keyframe boundaries.
                 self._buffer.extend(plain)
@@ -535,8 +589,8 @@ class CpdMpegPsRelay:
                 self._stats.errors_relay_pump += 1
             _LOGGER.warning("[RELAY] pump task error: %s", exc)
         finally:
-            # Allow ``_teardown_upstream`` to clean up cleanly.
-            pass
+            if watchdog is not None:
+                watchdog.cancel()
 
     # ── Buffer helpers ─────────────────────────────────────────────────────
 
