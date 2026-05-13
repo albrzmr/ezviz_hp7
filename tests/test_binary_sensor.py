@@ -67,10 +67,16 @@ def test_to_bool(raw: Any, expected: bool) -> None:
 # ── ALARM_MAP / SIMPLE_MAP shape ───────────────────────────────────
 
 
-def test_simple_map_is_empty_for_hp7() -> None:
-    """The HP7 firmware doesn't populate any simple-bool fields.
-    Keeping the list empty avoids permanently-OFF zombie sensors."""
-    assert SIMPLE_MAP == []
+def test_simple_map_contains_image_encryption() -> None:
+    """``image_encryption`` is the one simple-bool field the HP7 firmware
+    populates via ``STATUS.isEncrypt`` — surfaced so users see it on the
+    device card when Video Encryption is toggled on."""
+    assert len(SIMPLE_MAP) == 1
+    data_key, translation_key, device_class, icon = SIMPLE_MAP[0]
+    assert data_key == "image_encryption"
+    assert translation_key == "image_encryption"
+    assert device_class is None
+    assert icon.startswith("mdi:")
 
 
 @pytest.mark.parametrize("cfg", ALARM_MAP, ids=lambda c: c[1])
@@ -258,7 +264,7 @@ def test_hp7_binary_alarm_device_info_falls_back_to_hp7() -> None:
 # ── async_setup_entry ──────────────────────────────────────────────
 
 
-async def test_async_setup_entry_registers_one_entity_per_alarm() -> None:
+async def test_async_setup_entry_registers_simple_and_alarm_entities() -> None:
     coord = MagicMock(data={})
     hass = MagicMock()
     hass.data = {DOMAIN: {"entry-id": {"coordinator": coord, "serial": "S"}}}
@@ -270,4 +276,7 @@ async def test_async_setup_entry_registers_one_entity_per_alarm() -> None:
     add.assert_called_once()
     (entities,), _ = add.call_args
     assert len(entities) == len(SIMPLE_MAP) + len(ALARM_MAP)
-    assert all(isinstance(e, Hp7BinaryAlarm) for e in entities)
+    n_simple = sum(1 for e in entities if isinstance(e, Hp7BinarySimple))
+    n_alarm = sum(1 for e in entities if isinstance(e, Hp7BinaryAlarm))
+    assert n_simple == len(SIMPLE_MAP)
+    assert n_alarm == len(ALARM_MAP)

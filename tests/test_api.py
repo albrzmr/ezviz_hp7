@@ -488,6 +488,7 @@ def test_get_static_status_maps_device_and_wifi_fields(patched_api) -> None:
         "signal": 80,
         "local_ip": "192.0.2.10",
         "local_rtsp_port": "8554",
+        "image_encryption": False,
     }
 
 
@@ -670,6 +671,7 @@ def test_hp7_camera_status_static_dict_extracts_pagelist_fields() -> None:
         "WIFI": {"ssid": "Casa", "signal": 80, "address": "192.168.1.10"},
         "local_ip": "192.168.1.10",
         "local_rtsp_port": "8554",
+        "image_encryption": False,
     }
 
 
