@@ -7,6 +7,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 import pyezvizapi.client as _ezviz_client_mod
+import requests
 from pyezvizapi.camera import EzvizCamera
 from pyezvizapi.client import EzvizClient
 from pyezvizapi.exceptions import (
@@ -438,7 +439,53 @@ class Hp7Api:
             bare,
             elapsed * 1000,
         )
+
+        # Best-effort: hit /v3/p2pbusiness/configurations/p2p to register
+        # the client.  The official EZVIZ app posts this with the user JWT
+        # right before opening RealPlay.  The cloud returns a 32-byte
+        # secret + saltIndex + 13-day expireTime.  Hypothesis: without
+        # this call the device side does not authorize the client to open
+        # its LAN streaming ports, which would explain Errno 111 on
+        # users' deployments that have never recently used the official
+        # app to view this device.
+        self._invoke_p2p_register()
+
         return key_bytes
+
+    def _invoke_p2p_register(self) -> None:
+        """Best-effort POST to /v3/p2pbusiness/configurations/p2p.
+
+        Mirrors the request the official app issues right before a
+        live-view session.  No raise on failure — this is purely a
+        side-effect call to see if it unblocks LAN ports for users
+        whose camera firmware does not expose them by default.
+        """
+        if not self._token or not self._token.get("session_id"):
+            _LOGGER.debug("[P2P-REG] no session_id available, skipping")
+            return
+        url = f"https://{self._url}/v3/p2pbusiness/configurations/p2p"
+        headers = {
+            "appId": "ys7",
+            "clientType": "1",
+            "clientVersion": "7.4.0.2679037",
+            "User-Agent": "EZVIZ/7.4.0 (iPhone; iOS 26.0.1; Scale/3.00)",
+            "lang": "es_ES",
+            "language": "es_ES",
+            "netType": "WIFI",
+        }
+        data = {"sessionId": self._token["session_id"]}
+        try:
+            resp = requests.post(url, headers=headers, data=data, timeout=8.0)
+            _LOGGER.info(
+                "[P2P-REG] POST %s -> %d (%d B)",
+                url,
+                resp.status_code,
+                len(resp.content),
+            )
+            body_text = resp.text[:400] if resp.text else "(empty)"
+            _LOGGER.info("[P2P-REG] response: %s", body_text)
+        except Exception as exc:
+            _LOGGER.warning("[P2P-REG] POST failed (best-effort): %s", exc)
 
     def invalidate_aes_cache(self, serial: str | None = None) -> None:
         """Drop cached AES key(s).
