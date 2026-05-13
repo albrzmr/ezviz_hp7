@@ -464,14 +464,18 @@ class Hp7Api:
             _LOGGER.debug("[P2P-REG] no session_id available, skipping")
             return
         url = f"https://{self._url}/v3/p2pbusiness/configurations/p2p"
+        # Headers stripped of install-specific fingerprints.  Earlier
+        # versions copied ``clientVersion``, ``User-Agent`` and ``lang``
+        # verbatim from the maintainer's iPhone capture — every user
+        # ended up advertising the same iOS app + ``es_ES`` locale to
+        # the EZVIZ cloud, which is at best deceptive and at worst can
+        # trip server-side fingerprinting.  Keep only the values that
+        # are protocol identifiers (not user / locale identifiers).
         headers = {
             "appId": "ys7",
             "clientType": "1",
-            "clientVersion": "7.4.0.2679037",
-            "User-Agent": "EZVIZ/7.4.0 (iPhone; iOS 26.0.1; Scale/3.00)",
-            "lang": "es_ES",
-            "language": "es_ES",
             "netType": "WIFI",
+            "User-Agent": "EZVIZ/CloudClient",
         }
         data = {"sessionId": self._token["session_id"]}
         try:
