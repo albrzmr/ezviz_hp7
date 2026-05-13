@@ -42,6 +42,75 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_DOOR_LOCK_NO = 2
 DEFAULT_GATE_LOCK_NO = 1
 
+DEFAULT_ALARM_PIC_URL = (
+    "https://eustatics.ezvizlife.com/ovs_mall/web/img/index/EZVIZ_logo.png"
+    "?ver=3007907502"
+)
+
+
+class Hp7EzvizCamera(EzvizCamera):
+    """``EzvizCamera`` specialised for HP7 / CP7 cloud polling.
+
+    Why not call ``EzvizCamera.status(...)`` directly?  Upstream's
+    ``status()`` signature differs across pyezvizapi versions — the
+    ``refresh`` / ``latest_alarm`` kwargs only exist from 1.0.4.x —
+    and HA's loader can keep an older pyezvizapi pinned by the core
+    ``ezviz`` integration loaded in ``sys.modules`` even when our
+    manifest requests a newer one.  Instead of brittle kwarg
+    juggling we build the small dicts we actually consume from the
+    underlying ``device_obj`` and prefetched alarm payload using
+    primitives that have been stable since 1.0.x (``fetch_key``,
+    ``_local_ip``, ``_motion_trigger``).
+    """
+
+    def status_static_dict(self) -> dict[str, Any]:
+        """Static device fields derived from ``pagelist`` only.
+
+        Mirrors the subset of keys ``Hp7Api.get_static_status`` reads
+        from ``EzvizCamera.status()`` and nothing else — no alarm
+        fetch, no extra HTTP.
+        """
+        local_rtsp_port = self.fetch_key(["CONNECTION", "localRtspPort"], "554")
+        if local_rtsp_port in (0, "0", None):
+            local_rtsp_port = "554"
+        return {
+            "name": self.fetch_key(["deviceInfos", "name"]),
+            "version": self.fetch_key(["deviceInfos", "version"]),
+            "upgrade_available": bool(
+                self.fetch_key(["UPGRADE", "isNeedUpgrade"]) == 3
+            ),
+            "status": self.fetch_key(["deviceInfos", "status"]),
+            "wan_ip": self.fetch_key(["CONNECTION", "netIp"]),
+            "WIFI": self._device.get("WIFI") or {},
+            "local_ip": self._local_ip(),
+            "local_rtsp_port": str(local_rtsp_port),
+        }
+
+    def status_alarm_dict(self, latest_alarm: dict[str, Any] | None) -> dict[str, Any]:
+        """Alarm fields derived from a prefetched ``unifiedmsg/list`` item.
+
+        Equivalent to ``status(refresh=True, latest_alarm=...)`` from
+        pyezvizapi ≥1.0.4 but reduced to the four keys
+        ``Hp7Api.get_alarms`` consumes.
+        """
+        self._last_alarm = latest_alarm or {}
+        if self._last_alarm.get("alarmStartTimeStr"):
+            try:
+                self._motion_trigger()
+            except (ValueError, TypeError) as err:
+                # Upstream's parser is strict about the date format —
+                # log and degrade rather than fail the poll.
+                _LOGGER.debug(
+                    "motion-trigger parse failed for prefetched alarm: %s", err
+                )
+        return {
+            "Seconds_Last_Trigger": self._alarmmotiontrigger.get("timepassed"),
+            "last_alarm_time": self._last_alarm.get("alarmStartTimeStr"),
+            "last_alarm_pic": self._last_alarm.get("picUrl", DEFAULT_ALARM_PIC_URL),
+            "last_alarm_type_name": self._last_alarm.get("sampleName", "NoAlarm"),
+        }
+
+
 REGION_URLS: dict[str, str] = {
     "eu": "apiieu.ezvizlife.com",
     "us": "apiisa.ezvizlife.com",
@@ -527,8 +596,8 @@ class Hp7Api:
             raise RuntimeError("EZVIZ HP7 cloud client not initialised")
 
         device_obj = self._client.get_device_infos(serial)
-        camera = EzvizCamera(self._client, serial, device_obj=device_obj)
-        cam_status = camera.status(refresh=False)
+        camera = Hp7EzvizCamera(self._client, serial, device_obj=device_obj)
+        cam_status = camera.status_static_dict()
         wifi_info = cam_status.get("WIFI") or {}
         _LOGGER.debug("Static device status received for %s", serial)
 
@@ -577,8 +646,8 @@ class Hp7Api:
 
         # ``device_obj={}`` keeps the camera helper offline — it only
         # needs the alarm payload to populate the four fields below.
-        camera = EzvizCamera(self._client, serial, device_obj={})
-        cam_status = camera.status(refresh=True, latest_alarm=latest)
+        camera = Hp7EzvizCamera(self._client, serial, device_obj={"SWITCH": []})
+        cam_status = camera.status_alarm_dict(latest)
         _LOGGER.debug("Alarm poll for %s returned message=%s", serial, bool(latest))
 
         return {
