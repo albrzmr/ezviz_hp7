@@ -92,6 +92,9 @@
       },
       "unlock_lock": {
         "name": "Serrure Déverrouillée"
+      },
+      "image_encryption": {
+        "name": "Chiffrement vidéo activé"
       }
     },
     "button": {

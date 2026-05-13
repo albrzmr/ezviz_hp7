@@ -103,6 +103,9 @@
       },
       "unlock_lock": {
         "name": "Lock Unlocked"
+      },
+      "image_encryption": {
+        "name": "Video Encryption Enabled"
       }
     },
     "select": {

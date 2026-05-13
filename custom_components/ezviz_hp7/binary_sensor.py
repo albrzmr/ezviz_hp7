@@ -35,16 +35,23 @@ PULSE_SECONDS = 3
 
 # Simple binary sensors mapped directly to coordinator data keys.
 #
+# ``(coord_key, translation_key, device_class, icon)``.  ``device_class``
+# may be ``None`` when no HA-standard class fits.
+#
 # Note (HP7 firmware): the ``Motion_Trigger`` field that the upstream
 # integration mapped a sensor to does not appear in the cam_status
 # payload returned by EZVIZ for HP7 / CP7 devices — verified across
 # 240+ polls in beta-testing.  Keeping a binary sensor whose value is
-# permanently OFF is misleading, so the simple-map list is empty for
-# now.  Motion / presence detection on this device is exposed via the
-# pulse-style alarm sensors below (``smart_detection_alarm``,
-# ``intelligent_detection_alarm``, ``doorbell_ringing``…), which the
-# cloud does populate reliably.
-SIMPLE_MAP: list[tuple[str, str, BinarySensorDeviceClass]] = []
+# permanently OFF is misleading.  Motion / presence detection on this
+# device is exposed via the pulse-style alarm sensors below
+# (``smart_detection_alarm``, ``intelligent_detection_alarm``,
+# ``doorbell_ringing``…), which the cloud does populate reliably.
+SIMPLE_MAP: list[tuple[str, str, BinarySensorDeviceClass | None, str | None]] = [
+    # User-toggled "Video Encryption" in the EZVIZ app.  When ON the
+    # LAN stream stays empty — surfacing it on the dashboard lets the
+    # user spot it without reading the log.
+    ("image_encryption", "image_encryption", None, "mdi:lock-alert"),
+]
 
 # Alarm sensors that trigger for PULSE_SECONDS when specific alarm names appear
 ALARM_MAP: list[tuple[list[str], str, BinarySensorDeviceClass | None, str]] = [
@@ -115,9 +122,11 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
 
     entities: list[BinarySensorEntity] = []
 
-    for key, translation_key, device_class in SIMPLE_MAP:
+    for key, translation_key, device_class, icon in SIMPLE_MAP:
         entities.append(
-            Hp7BinarySimple(coordinator, serial, key, translation_key, device_class)
+            Hp7BinarySimple(
+                coordinator, serial, key, translation_key, device_class, icon
+            )
         )
 
     for match_values, translation_key, device_class, icon in ALARM_MAP:
@@ -146,23 +155,18 @@ class Hp7BinarySimple(CoordinatorEntity, BinarySensorEntity):
         serial: str,
         key: str,
         translation_key: str,
-        device_class: BinarySensorDeviceClass,
+        device_class: BinarySensorDeviceClass | None,
+        icon: str | None = None,
     ) -> None:
-        """Initialize binary sensor entity.
-
-        Args:
-            coordinator: Data coordinator.
-            serial: Device serial number.
-            key: Key in coordinator data.
-            translation_key: i18n translation key.
-            device_class: Device class for sensor.
-        """
+        """Initialize binary sensor entity."""
         super().__init__(coordinator)
         self._serial = serial
         self._key = key
         self._attr_translation_key = translation_key
         self._attr_unique_id = f"{DOMAIN}_{serial}_binary_{key}"
         self._attr_device_class = device_class
+        if icon is not None:
+            self._attr_icon = icon
 
     @property
     def is_on(self) -> bool:

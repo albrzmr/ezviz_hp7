@@ -89,6 +89,11 @@
         }
       }
     },
+    "binary_sensor": {
+      "image_encryption": {
+        "name": "Video encryption enabled"
+      }
+    },
     "select": {
       "live_view_mode": {
         "name": "Live view mode",

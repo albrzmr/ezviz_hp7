@@ -103,6 +103,9 @@
       },
       "unlock_lock": {
         "name": "Cerradura Desbloqueada"
+      },
+      "image_encryption": {
+        "name": "Cifrado de Vídeo Activado"
       }
     },
     "select": {
