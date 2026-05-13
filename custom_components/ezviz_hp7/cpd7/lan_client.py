@@ -4,6 +4,7 @@ Replaces the dead port-8000 NetSDK path with the working LAN protocol on
 ports 9010 (control) and 9020 (play).  Wire format and decryption details
 are documented in docs/cpd7-stream-recipe/02-PROTOCOL.md.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -13,13 +14,11 @@ import socket
 import struct
 import time
 import uuid
-from typing import Tuple
 
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 
 from .crypto import generate_ecdh_keypair
-
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,9 +27,9 @@ PORT_CTRL = 9010
 PORT_PLAY = 9020
 DEFAULT_RX_PORT = 10105
 
-CMD_INIT = 0x2013        # init session   (port 9010)
-CMD_INVITE = 0x2011      # invite stream  (port 9010)
-CMD_PLAY = 0x3105        # play           (port 9020)
+CMD_INIT = 0x2013  # init session   (port 9010)
+CMD_INVITE = 0x2011  # invite stream  (port 9010)
+CMD_PLAY = 0x3105  # play           (port 9020)
 
 HEADER_LEN = 32
 MD5_TRAILER_LEN = 32
@@ -72,13 +71,13 @@ def _build_packet(seq: int, cmd: int, plaintext_xml: bytes, key: bytes) -> bytes
     return header + body + trailer
 
 
-def _parse_response(wire: bytes, key: bytes) -> Tuple[dict, bytes]:
+def _parse_response(wire: bytes, key: bytes) -> tuple[dict, bytes]:
     if wire[:4] != MAGIC:
         raise ConnectionError(f"bad magic: {wire[:4].hex()}")
     seq = struct.unpack(">I", wire[8:12])[0]
     cmd = struct.unpack(">I", wire[16:20])[0]
     body_len = struct.unpack(">I", wire[24:28])[0]
-    body = wire[HEADER_LEN:HEADER_LEN + body_len]
+    body = wire[HEADER_LEN : HEADER_LEN + body_len]
     if body.startswith(b"<?xml"):
         plain = body
     else:
@@ -124,12 +123,17 @@ def _xml_init(session: int) -> bytes:
         f"\t<OperationCode>{PLACEHOLDER_OP_CODE}</OperationCode>\n"
         f"\t<Session>{session}</Session>\n"
         f"</Request>\n"
-    ).encode("utf-8")
+    ).encode()
 
 
 def _xml_invite(
-    *, related_device: str, channel: int, encrypt_stream: bool,
-    receiver_addr: str, receiver_port: int, pubkey_b64: str,
+    *,
+    related_device: str,
+    channel: int,
+    encrypt_stream: bool,
+    receiver_addr: str,
+    receiver_port: int,
+    pubkey_b64: str,
 ) -> bytes:
     enc_str = "TRUE" if encrypt_stream else "FALSE"
     timestamp = int(time.time() * 1000)
@@ -140,7 +144,7 @@ def _xml_invite(
         f"<Request>\n"
         f"\t<OperationCode>{PLACEHOLDER_OP_CODE}</OperationCode>\n"
         f'\t<Channel RelatedDevice="{related_device}">{channel}</Channel>\n'
-        f'\t<ReceiverInfo Address="{receiver_addr}" Port="{receiver_port}" '
+        f'\t<ReceiverInfo Address="" Port="{receiver_port}" '
         f'ServerType="1" StreamType="MAIN" NewStreamType="1" TransProto="TCP" />\n'
         f"\t<IsEncrypt>{enc_str}</IsEncrypt>\n"
         f'\t<ReceiverInfoEx SessionID="" Port="{receiver_port}" />\n'
@@ -149,7 +153,7 @@ def _xml_invite(
         f"\t<Timestamp>{timestamp}</Timestamp>"
         f"{pubkey_xml}\n"
         f"</Request>\n"
-    ).encode("utf-8")
+    ).encode()
 
 
 def _xml_play(session: int, rate: int = 1, mode: int = -1) -> bytes:
@@ -160,7 +164,7 @@ def _xml_play(session: int, rate: int = 1, mode: int = -1) -> bytes:
         f"\t<Rate>{rate}</Rate>\n"
         f"\t<Mode>{mode}</Mode>\n"
         f"</Request>\n"
-    ).encode("utf-8")
+    ).encode()
 
 
 # ── Client ────────────────────────────────────────────────────────────────
@@ -215,8 +219,9 @@ class Cpd7LanClient:
     def ecdh_priv(self):
         return self._ecdh_priv
 
-    def _send_cmd(self, sock: socket.socket, seq: int, cmd: int,
-                   xml: bytes, tag: str) -> Tuple[dict, bytes]:
+    def _send_cmd(
+        self, sock: socket.socket, seq: int, cmd: int, xml: bytes, tag: str
+    ) -> tuple[dict, bytes]:
         pkt = _build_packet(seq, cmd, xml, self._aes_key)
         sock.sendall(pkt)
         resp = _recv_response(sock, timeout=self._cmd_timeout)
@@ -224,7 +229,11 @@ class Cpd7LanClient:
         if _LOGGER.isEnabledFor(logging.DEBUG):
             _LOGGER.debug(
                 "CPD7 %s seq=%d cmd=0x%04x rx_cmd=0x%04x body=%dB",
-                tag, seq, cmd, meta["cmd"], meta["body_len"],
+                tag,
+                seq,
+                cmd,
+                meta["cmd"],
+                meta["body_len"],
             )
         return meta, plain
 
@@ -291,7 +300,7 @@ class Cpd7LanClient:
         self._play_sock.settimeout(self._recv_timeout)
         try:
             return self._play_sock.recv(max_bytes)
-        except socket.timeout:
+        except TimeoutError:
             return b""
         except OSError:
             return b""
