@@ -84,6 +84,13 @@ class Hp7EzvizCamera(EzvizCamera):
             "WIFI": self._device.get("WIFI") or {},
             "local_ip": self._local_ip(),
             "local_rtsp_port": str(local_rtsp_port),
+            # User-toggled "Video / Image Encryption" in the EZVIZ app.
+            # When ON the device wraps the LAN stream with a verification-
+            # code-derived layer the integration does not yet support —
+            # PLAY succeeds but no plaintext bytes ever arrive.  Exposed
+            # so a binary sensor can surface it and the AES fetch can
+            # WARN the user.
+            "image_encryption": bool(self.fetch_key(["STATUS", "isEncrypt"])),
         }
 
     def status_alarm_dict(self, latest_alarm: dict[str, Any] | None) -> dict[str, Any]:
@@ -168,6 +175,12 @@ class Hp7Api:
         # invalidated on any decrypt error from the LAN client (see
         # ``invalidate_aes_cache``).
         self._aes_cache: dict[str, tuple[bytes, float]] = {}
+        # Image Encryption is a user-toggleable mode in the EZVIZ app
+        # that the integration does not yet support.  Log a single
+        # WARNING per device per HA restart when it is detected so
+        # users see a clear pointer in the log without spamming on
+        # every static-poll cycle.
+        self._warned_image_encryption: dict[str, bool] = {}
 
     # AES-128 control key cache TTL.  The key only changes when the
     # doorbell is re-paired (rare, manual user action), so a long TTL
@@ -601,6 +614,19 @@ class Hp7Api:
         wifi_info = cam_status.get("WIFI") or {}
         _LOGGER.debug("Static device status received for %s", serial)
 
+        image_encryption = bool(cam_status.get("image_encryption"))
+        if image_encryption and not self._warned_image_encryption.get(serial):
+            self._warned_image_encryption[serial] = True
+            _LOGGER.warning(
+                "[%s] Image / Video Encryption appears to be ENABLED on this "
+                "device.  Live view via LAN is NOT supported in this mode "
+                "yet — the camera accepts PLAY but never emits plaintext "
+                "video bytes, so the stream stays empty.  Workaround: open "
+                "the EZVIZ app → device Settings → Video Encryption and "
+                "turn it OFF.",
+                serial,
+            )
+
         return {
             "name": cam_status.get("name"),
             "version": cam_status.get("version"),
@@ -611,6 +637,7 @@ class Hp7Api:
             "signal": wifi_info.get("signal"),
             "local_ip": cam_status.get("local_ip") or wifi_info.get("address"),
             "local_rtsp_port": cam_status.get("local_rtsp_port") or "554",
+            "image_encryption": image_encryption,
         }
 
     def get_alarms(self, serial: str) -> dict[str, Any]:

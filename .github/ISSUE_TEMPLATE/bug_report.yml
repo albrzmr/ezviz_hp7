@@ -1,0 +1,100 @@
+name: Bug report
+description: Report a problem with the EZVIZ HP7 / CP7 integration
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug.  A few quick checks first — most
+        live-view problems trace back to one of these:
+
+        - **Video Encryption** in the EZVIZ app must be OFF (Settings →
+          Video / Image Encryption).  When it is ON, the camera
+          accepts our PLAY but never sends video bytes and the stream
+          stays empty.
+        - The doorbell must be reachable from Home Assistant on the
+          local network (LAN-only protocol — no cloud streaming).
+        - HA must be running 2025.1 or newer.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checklist
+      description: Please confirm before submitting.
+      options:
+        - label: "I verified that **Video Encryption** is OFF in the EZVIZ app (Settings → Video Encryption / Image Encryption / Privacy → Encryption)."
+          required: true
+        - label: "I confirmed Home Assistant can reach the doorbell on the LAN (same VLAN / no firewall rule blocking the doorbell's 9020 TCP port)."
+          required: true
+        - label: "I am running the latest release of this integration."
+          required: true
+
+  - type: input
+    id: integration_version
+    attributes:
+      label: Integration version
+      description: e.g. `0.8.5`.  Found in Settings → Devices & Services → EZVIZ HP7 / CP7 → ⓘ.
+      placeholder: "0.8.x"
+    validations:
+      required: true
+
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      description: e.g. `2026.4.4`.  Settings → About.
+      placeholder: "2026.x.x"
+    validations:
+      required: true
+
+  - type: input
+    id: firmware
+    attributes:
+      label: Doorbell firmware version
+      description: EZVIZ app → device → Settings → About → Version.  e.g. `V5.3.6 build 250925`.
+      placeholder: "V5.x.x build ..."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: model
+    attributes:
+      label: Device model
+      options:
+        - HP7
+        - CP7
+        - Other (specify in description)
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What is happening?
+      description: What did you do, what did you expect, what did you see instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Home Assistant log
+      description: |
+        Please attach at least the last ~100 lines from Settings → System
+        → Logs filtered by `ezviz_hp7` while reproducing the issue.
+        For live-view problems, please **enable DEBUG logging** first:
+
+        ```yaml
+        logger:
+          logs:
+            custom_components.ezviz_hp7: debug
+        ```
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: extras
+    attributes:
+      label: Anything else?
+      description: Screenshots, network setup notes, related issues…

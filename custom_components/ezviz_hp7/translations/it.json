@@ -92,6 +92,9 @@
       },
       "unlock_lock": {
         "name": "Serratura Aperta"
+      },
+      "image_encryption": {
+        "name": "Crittografia video attivata"
       }
     },
     "button": {
