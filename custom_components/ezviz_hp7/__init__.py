@@ -269,7 +269,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await relay.async_stop()
         api: Hp7Api | None = data.get("api")
         if api:
-            api.close()
+            await hass.async_add_executor_job(api.close)
         # One last summary so the log captures what happened during the
         # entry's lifetime, useful when reviewing reloads.
         stats: ActivityStats | None = data.get("stats")
