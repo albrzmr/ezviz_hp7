@@ -64,12 +64,15 @@ def _build_ffmpeg_cmd(
         "32",
         "-analyzeduration",
         "0",
+        # Drop decoded frames whose references are missing instead of
+        # rendering them with whatever bytes the decoder has on hand
+        # — that's what painted the first ~2-3 s of every stream grey
+        # before, since ffmpeg started decoding on the pre-keyframe
+        # slack that StreamDecoder still bundled with the first VPS.
         "-fflags",
         "+discardcorrupt+nobuffer",
         "-flags",
         "low_delay",
-        "-err_detect",
-        "ignore_err",
         "-i",
         upstream_url,
         "-an",

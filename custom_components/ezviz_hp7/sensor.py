@@ -73,6 +73,12 @@ SENSORS: list[
         None,
     ),
     ("alarm_name", "alarm_name", None, None, "mdi:alert", None),
+    # ``alarm_type_code`` is the language-stable ``ext.alarmType``
+    # numeric id (e.g. ``10079`` for Smart Detection, ``10243`` for
+    # gate open).  Exposed so users with EZVIZ accounts in languages
+    # we don't have name-matches for can build automations against a
+    # field that does not change with locale.  See issue #8.
+    ("alarm_type_code", "alarm_type_code", None, None, "mdi:numeric", None),
     (
         "seconds_last_trigger",
         "seconds_last_trigger",

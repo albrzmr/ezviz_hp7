@@ -8,10 +8,11 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import DOMAIN, SIGNAL_LOCAL_UNLOCK
 from .helpers import get_device_info
 
 if TYPE_CHECKING:
@@ -100,5 +101,12 @@ class EzvizHp7Button(ButtonEntity):
 
         if success:
             _LOGGER.info("EZVIZ HP7: %s successful", log_msg)
+            # Pulse the matching binary sensor without waiting for the
+            # cloud's ``unifiedmsg/list`` echo — that feed is localised
+            # to the account language and was missing the English
+            # ``sampleName`` we used to key on (issue #8).
+            async_dispatcher_send(
+                self.hass, SIGNAL_LOCAL_UNLOCK, self._serial, self._action
+            )
         else:
             _LOGGER.error("EZVIZ HP7: %s failed", log_msg)

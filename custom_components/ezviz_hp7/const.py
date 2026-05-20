@@ -4,6 +4,14 @@ DOMAIN = "ezviz_hp7"
 CONF_REGION = "region"
 CONF_SERIAL = "serial"
 CONF_CAMERA_PASSWORD = "camera_password"
+
+# Dispatcher signal fired by the unlock button (or service) on a
+# successful local unlock.  Consumed by the gate / lock binary
+# sensors so they pulse ON even when the cloud's
+# ``unifiedmsg/list`` event arrives with a translated alarm name we
+# don't match — or doesn't arrive at all.  Payload: (serial, action),
+# where ``action`` is ``"unlock_gate"`` or ``"unlock_door"``.
+SIGNAL_LOCAL_UNLOCK = f"{DOMAIN}_local_unlock"
 # Per-install random featureCode (32-char hex).  Generated once on
 # first ``async_setup_entry`` and persisted in ``entry.data`` so each
 # install carries its own EUCAS fingerprint — there is no global

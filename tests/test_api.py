@@ -565,6 +565,8 @@ def test_get_alarms_maps_alarm_fields(patched_api) -> None:
             "last_alarm_time": "2026-05-11 10:00:00",
             "last_alarm_pic": "https://x/snap.jpg",
             "last_alarm_type_name": "Doorbell ring",
+            "last_alarm_type_code": "3001",
+            "Motion_Trigger": True,
         }
     )
     _set_messages_response([{"deviceSerial": "SER", "title": "Doorbell ring"}])
@@ -574,7 +576,69 @@ def test_get_alarms_maps_alarm_fields(patched_api) -> None:
         "last_alarm_time": "2026-05-11 10:00:00",
         "last_alarm_pic": "https://x/snap.jpg",
         "alarm_name": "Doorbell ring",
+        "alarm_type_code": "3001",
+        "motion_trigger": True,
     }
+
+
+def test_get_alarms_normalises_raw_unified_message_before_status_alarm_dict(
+    patched_api,
+) -> None:
+    """The cloud returns raw unified messages with ``title`` / ``timeStr`` /
+    ``subType`` / ``pic`` keys.  ``status_alarm_dict`` expects the
+    normalised shape (``sampleName`` / ``alarmStartTimeStr`` / ``alarmType`` /
+    ``picUrl``).  Without the normalisation hop in ``get_alarms``, the
+    alarm dict would silently fall back to ``NoAlarm`` for every event.
+    """
+    raw_msg = {
+        "deviceSerial": "SER",
+        "title": "Your doorbell is ringing",
+        "timeStr": "2026-05-20 18:32:02",
+        "subType": "2701",
+        "pic": "https://x/snap.jpg",
+    }
+    # The fixture sets ``api._client`` to a fresh MagicMock independent
+    # of ``EzvizClient.return_value``, so we configure the instance's
+    # client directly (the helper ``_set_messages_response`` targets the
+    # class-level mock and would not be observed by the code under test).
+    patched_api._client.get_device_messages_list.return_value = {"message": [raw_msg]}
+    cam = api_mod.Hp7EzvizCamera.return_value
+    cam._normalize_unified_message.return_value = {
+        "sampleName": "Your doorbell is ringing",
+        "alarmStartTimeStr": "2026-05-20 18:32:02",
+        "alarmType": "2701",
+        "picUrl": "https://x/snap.jpg",
+    }
+    _set_alarms_payload(
+        {
+            "Seconds_Last_Trigger": 1,
+            "last_alarm_time": "2026-05-20 18:32:02",
+            "last_alarm_pic": "https://x/snap.jpg",
+            "last_alarm_type_name": "Your doorbell is ringing",
+            "last_alarm_type_code": "2701",
+        }
+    )
+    out = patched_api.get_alarms("SER")
+    cam._normalize_unified_message.assert_called_once_with(raw_msg)
+    # ``status_alarm_dict`` must receive the normalised dict, never the raw.
+    args, _ = cam.status_alarm_dict.call_args
+    assert args[0] is cam._normalize_unified_message.return_value
+    # End-to-end shape: code surfaces alongside name.
+    assert out["alarm_name"] == "Your doorbell is ringing"
+    assert out["alarm_type_code"] == "2701"
+
+
+def test_get_alarms_passes_none_when_no_message_for_this_serial(patched_api) -> None:
+    """Empty / wrong-serial responses must NOT call ``_normalize_unified_message``
+    on a ``None`` payload — the contract is ``status_alarm_dict(None)``."""
+    _set_alarms_payload({"Seconds_Last_Trigger": None})
+    patched_api._client.get_device_messages_list.return_value = {"message": []}
+    cam = api_mod.Hp7EzvizCamera.return_value
+    cam._normalize_unified_message.reset_mock()
+    patched_api.get_alarms("SER")
+    cam._normalize_unified_message.assert_not_called()
+    args, _ = cam.status_alarm_dict.call_args
+    assert args[0] is None
 
 
 def test_get_alarms_ignores_messages_from_other_devices(patched_api) -> None:
@@ -695,7 +759,7 @@ def test_hp7_camera_status_static_dict_upgrade_available_when_status_3() -> None
 
 
 def test_hp7_camera_status_alarm_dict_with_prefetched_alarm() -> None:
-    """A fresh alarm (timestamp <60s ago) populates all four fields and
+    """A fresh alarm (timestamp <60s ago) populates all five fields and
     a non-None ``Seconds_Last_Trigger``."""
     import datetime as _dt
 
@@ -706,19 +770,22 @@ def test_hp7_camera_status_alarm_dict_with_prefetched_alarm() -> None:
             "alarmStartTimeStr": now_str,
             "picUrl": "https://x/snap.jpg",
             "sampleName": "Doorbell ring",
+            "alarmType": "2701",
         }
     )
     assert out["last_alarm_time"] == now_str
     assert out["last_alarm_pic"] == "https://x/snap.jpg"
     assert out["last_alarm_type_name"] == "Doorbell ring"
+    assert out["last_alarm_type_code"] == "2701"
     # ``timepassed`` is in seconds and should be small (just-now).
     assert out["Seconds_Last_Trigger"] is not None
     assert out["Seconds_Last_Trigger"] < 5
 
 
 def test_hp7_camera_status_alarm_dict_with_none_alarm() -> None:
-    """No prefetched alarm → all four fields take defaults and
-    ``Seconds_Last_Trigger`` stays ``None`` (no motion)."""
+    """No prefetched alarm → all six fields take defaults and
+    ``Seconds_Last_Trigger`` / ``Motion_Trigger`` stay ``None`` /
+    falsy (no motion)."""
     cam = _make_camera({"SWITCH": []})
     out = cam.status_alarm_dict(None)
     assert out == {
@@ -726,6 +793,11 @@ def test_hp7_camera_status_alarm_dict_with_none_alarm() -> None:
         "last_alarm_time": None,
         "last_alarm_pic": DEFAULT_ALARM_PIC_URL,
         "last_alarm_type_name": "NoAlarm",
+        "last_alarm_type_code": "0000",
+        # ``compute_motion_from_alarm`` initialises ``alarm_trigger_active``
+        # to ``False`` even when no alarm has been seen, so ``Motion_Trigger``
+        # surfaces as ``False`` (off) rather than ``None``.
+        "Motion_Trigger": False,
     }
 
 
@@ -737,13 +809,15 @@ def test_hp7_camera_status_alarm_dict_swallows_unparseable_timestamp() -> None:
     cam = _make_camera({"SWITCH": []})
     out = cam.status_alarm_dict({"alarmStartTimeStr": "garbage"})
     # No crash; the raw timestamp string is preserved for the entity,
-    # and the rest of the dict still has its four keys.
+    # and the rest of the dict still has its six keys.
     assert out["last_alarm_time"] == "garbage"
     assert set(out.keys()) == {
         "Seconds_Last_Trigger",
         "last_alarm_time",
         "last_alarm_pic",
         "last_alarm_type_name",
+        "last_alarm_type_code",
+        "Motion_Trigger",
     }
 
 

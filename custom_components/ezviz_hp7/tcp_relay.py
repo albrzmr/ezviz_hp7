@@ -95,9 +95,13 @@ _KEYFRAME_WAIT_TIMEOUT_SEC = 6.0
 # I-frame) trails it across several decoded chunks.  Without this we
 # would wake the viewer with just the NAL headers and no slice data
 # — ffmpeg would receive a syntactically-valid handshake but nothing
-# to decode and paint grey until the next keyframe.  32 KB comfortably
-# covers a 2K HEVC I-frame on HP7 / CP7 (observed range ~30-150 KB).
-_KEYFRAME_MIN_TAIL_BYTES = 32 * 1024
+# to decode and paint grey until the next keyframe.  64 KB covers the
+# full IDR slice for the observed range on HP7 / CP7 (30-150 KB at
+# 2K HEVC) with one PES-packet of slack so ffmpeg doesn't start
+# decoding before the I-frame is on the wire — that's what produced
+# the few-second grey start.  Adds ~500 ms - 1 s to cold-start latency
+# in exchange for a clean first frame.
+_KEYFRAME_MIN_TAIL_BYTES = 64 * 1024
 
 # Time the pump task waits for the first raw byte from the camera before
 # emitting an actionable WARNING.  Healthy HP7 / CP7 firmware send the

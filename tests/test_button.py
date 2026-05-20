@@ -9,12 +9,12 @@ just awaits the function directly.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from custom_components.ezviz_hp7.button import EzvizHp7Button, async_setup_entry
-from custom_components.ezviz_hp7.const import DOMAIN
+from custom_components.ezviz_hp7.const import DOMAIN, SIGNAL_LOCAL_UNLOCK
 
 
 def _hass_with_executor() -> MagicMock:
@@ -146,3 +146,35 @@ async def test_async_press_propagates_capability_serial(action: str) -> None:
 
     await btn.async_press()
     getattr(api, action).assert_called_once_with("SERIAL-XYZ")
+
+
+# ── Dispatcher signal on successful unlock (issue #8) ─────────────
+
+
+@pytest.mark.parametrize("action", ["unlock_door", "unlock_gate"])
+async def test_successful_unlock_fires_local_signal(action: str) -> None:
+    """On success, the button must emit ``SIGNAL_LOCAL_UNLOCK`` with
+    ``(serial, action)``.  The matching binary sensor uses this to
+    pulse without consulting the localised cloud feed (issue #8)."""
+    api = MagicMock()
+    getattr(api, action).return_value = True
+    hass = _hass_with_executor()
+    btn = EzvizHp7Button(hass, api, "SERIAL-LOCAL", action)
+
+    with patch("custom_components.ezviz_hp7.button.async_dispatcher_send") as dispatch:
+        await btn.async_press()
+
+    dispatch.assert_called_once_with(hass, SIGNAL_LOCAL_UNLOCK, "SERIAL-LOCAL", action)
+
+
+async def test_failed_unlock_does_not_fire_local_signal() -> None:
+    """If the API returns False, no fake pulse — the dispatcher must
+    only fire on confirmed success."""
+    api = MagicMock()
+    api.unlock_door.return_value = False
+    hass = _hass_with_executor()
+    btn = EzvizHp7Button(hass, api, "S-1", "unlock_door")
+
+    with patch("custom_components.ezviz_hp7.button.async_dispatcher_send") as dispatch:
+        await btn.async_press()
+    dispatch.assert_not_called()

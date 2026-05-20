@@ -104,3 +104,62 @@ def test_decoder_take_drains_pending_emit_buffer() -> None:
     out = d.take()
     assert out == b"\x00\x00\x01\xbafake"
     assert d.take() == b""
+
+
+# ── _absorb_plain: keyframe gating & pack-lookback cap ────────────
+
+
+def test_absorb_plain_starts_at_nearby_pack_header() -> None:
+    """Pack header within one PES packet of the keyframe → emit from
+    the pack header (clean MPEG-PS muxer boundary for ffmpeg)."""
+    d = StreamDecoder(ecdh_priv=None)
+    junk = b"\x55" * 100
+    nearby_gap = b"\x00" * 1000  # well under _MAX_PACK_LOOKBACK_BEFORE_KF
+    plain = junk + MPEG_PS_PACK + nearby_gap + HEVC_VPS_4B + b"slice"
+    d._absorb_plain(plain)
+    out = d.take()
+    # The pack header sits at len(junk) inside the plaintext.
+    assert out.startswith(MPEG_PS_PACK)
+    assert b"slice" in out
+    assert d._mpeg_started is True
+
+
+def test_absorb_plain_falls_back_to_keyframe_when_pack_is_far() -> None:
+    """Pack header more than ``_MAX_PACK_LOOKBACK_BEFORE_KF`` bytes
+    before the keyframe belongs to a previous GOP; emitting from there
+    would feed ffmpeg P-frames whose references we never received
+    (the "grey for a few seconds" symptom).  Fall back to the bare
+    keyframe and let ffmpeg resync."""
+    d = StreamDecoder(ecdh_priv=None)
+    # Pack header, then a chunk LARGER than the lookback cap, then the
+    # keyframe — the pack should be rejected.
+    long_gap = b"\xab" * (64 * 1024 + 1)  # > _MAX_PACK_LOOKBACK_BEFORE_KF
+    plain = MPEG_PS_PACK + long_gap + HEVC_VPS_4B + b"slice"
+    d._absorb_plain(plain)
+    out = d.take()
+    assert out.startswith(HEVC_VPS_4B)
+    assert b"slice" in out
+    # And critically: the gap before the keyframe is NOT in the output.
+    assert MPEG_PS_PACK not in out
+    assert d._mpeg_started is True
+
+
+def test_absorb_plain_falls_back_to_keyframe_when_no_pack_present() -> None:
+    """No pack header at all before the keyframe → emit from the
+    keyframe directly (legacy behaviour, preserved)."""
+    d = StreamDecoder(ecdh_priv=None)
+    plain = b"\x55" * 200 + HEVC_VPS_4B + b"slice"
+    d._absorb_plain(plain)
+    out = d.take()
+    assert out.startswith(HEVC_VPS_4B)
+    assert b"slice" in out
+
+
+def test_absorb_plain_passes_through_after_keyframe_synced() -> None:
+    """Subsequent calls after the first keyframe go straight to the
+    emit buffer without re-gating."""
+    d = StreamDecoder(ecdh_priv=None)
+    d._absorb_plain(HEVC_VPS_4B + b"slice")
+    d.take()  # drain
+    d._absorb_plain(b"more-bytes")
+    assert d.take() == b"more-bytes"

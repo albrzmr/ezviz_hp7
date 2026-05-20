@@ -46,6 +46,20 @@ HEVC_VPS_3B = b"\x00\x00\x01\x40\x01"
 H264_SPS_4B = b"\x00\x00\x00\x01\x67"
 H264_SPS_3B = b"\x00\x00\x01\x67"
 
+# When the first keyframe arrives, we'd ideally start the output at
+# the MPEG-PS pack header that *contains* it so ffmpeg gets a clean
+# muxer boundary.  But the rfind() walks back arbitrarily far — if the
+# closest pack header is way before the keyframe it belongs to a
+# previous GOP whose P-frames decode against references we never
+# received.  Result: ffmpeg paints a few frames with the right shape
+# but grey/distorted texture before recovering at the next keyframe.
+# Cap how far back we accept a pack header so anything older falls
+# back to starting at the bare keyframe — ffmpeg resyncs on the next
+# pack header within milliseconds.  64 KB ≈ one MPEG-PS PES packet at
+# typical bitrates, which is plenty to land on the boundary that
+# actually surrounds the keyframe.
+_MAX_PACK_LOOKBACK_BEFORE_KF = 64 * 1024
+
 # Hard cap on the pre-keyframe buffer.  At ~150 KB/s the doorbell sends
 # keyframes well within ~2 seconds, so a couple of MB is plenty.  If we
 # blow past this without seeing a keyframe we emit anyway so the stream
@@ -221,20 +235,26 @@ class StreamDecoder:
         buf = bytes(self._pending)
         kf_off = self._find_keyframe(buf)
         if kf_off >= 0:
-            # Found keyframe (HEVC VPS or H.264 SPS) — emit from the
-            # MPEG-PS pack that precedes it (so ffmpeg gets a clean PS
-            # framing) all the way through.  If no pack header is found
-            # before the keyframe, fall back to emitting from the
-            # keyframe itself.
+            # Found keyframe (HEVC VPS or H.264 SPS).  Prefer starting
+            # at the surrounding MPEG-PS pack header (cleaner muxer
+            # boundary for ffmpeg) BUT only if it sits within one PES
+            # packet of the keyframe — a pack header from a previous
+            # GOP would feed ffmpeg P-frames whose references we
+            # missed, producing grey/distorted output until the next
+            # keyframe lands.  See ``_MAX_PACK_LOOKBACK_BEFORE_KF``.
             pack_off = buf.rfind(MPEG_PS_PACK, 0, kf_off)
-            start = pack_off if pack_off >= 0 else kf_off
+            if pack_off >= 0 and kf_off - pack_off <= _MAX_PACK_LOOKBACK_BEFORE_KF:
+                start = pack_off
+            else:
+                start = kf_off
             self._mpeg_started = True
             self._out.extend(buf[start:])
             self._pending.clear()
             _LOGGER.debug(
-                "CPD7 decoder: keyframe found at +%d (pack@%d) — stream synced",
+                "CPD7 decoder: keyframe found at +%d (pack@%d, start@%d) — synced",
                 kf_off,
                 pack_off,
+                start,
             )
             return
 

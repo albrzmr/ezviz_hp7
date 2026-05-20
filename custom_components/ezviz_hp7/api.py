@@ -97,9 +97,13 @@ class Hp7EzvizCamera(EzvizCamera):
     def status_alarm_dict(self, latest_alarm: dict[str, Any] | None) -> dict[str, Any]:
         """Alarm fields derived from a prefetched ``unifiedmsg/list`` item.
 
-        Equivalent to ``status(refresh=True, latest_alarm=...)`` from
-        pyezvizapi ≥1.0.4 but reduced to the four keys
-        ``Hp7Api.get_alarms`` consumes.
+        The argument must already be in pyezvizapi's *normalised* shape
+        (``sampleName`` / ``alarmStartTimeStr`` / ``picUrl`` / ``alarmType``).
+        Raw cloud messages — which carry ``title`` / ``timeStr`` / ``pic`` /
+        ``subType`` instead — produce ``NoAlarm`` here because none of the
+        expected keys exist.  ``Hp7Api.get_alarms`` is responsible for
+        normalising via ``EzvizCamera._normalize_unified_message`` before
+        calling this helper.
         """
         self._last_alarm = latest_alarm or {}
         if self._last_alarm.get("alarmStartTimeStr"):
@@ -116,6 +120,15 @@ class Hp7EzvizCamera(EzvizCamera):
             "last_alarm_time": self._last_alarm.get("alarmStartTimeStr"),
             "last_alarm_pic": self._last_alarm.get("picUrl", DEFAULT_ALARM_PIC_URL),
             "last_alarm_type_name": self._last_alarm.get("sampleName", "NoAlarm"),
+            "last_alarm_type_code": self._last_alarm.get("alarmType", "0000"),
+            # ``alarm_trigger_active`` is True while the last alarm is
+            # still inside the motion window pyezvizapi uses (see
+            # ``compute_motion_from_alarm``).  Surfaces as the standard
+            # ``binary_sensor.motion`` entity — the same one the official
+            # ezviz integration exposes.  Pre-normalisation this field
+            # was always False because the alarm dict never reached this
+            # helper populated.
+            "Motion_Trigger": self._alarmmotiontrigger.get("alarm_trigger_active"),
         }
 
 
@@ -697,7 +710,12 @@ class Hp7Api:
         Cost: one ``unifiedmsg/list`` HTTP call.  Returns only the
         alarm-derived fields the binary sensors and the prewarm hook
         depend on — ``last_alarm_time``, ``last_alarm_pic``,
-        ``alarm_name``, ``seconds_last_trigger``.
+        ``alarm_name``, ``alarm_type_code``, ``seconds_last_trigger``.
+
+        ``alarm_type_code`` is the language-stable ``alarmType``
+        identifier from the cloud payload; the binary-sensor layer
+        prefers it over ``alarm_name`` (the localised ``sampleName``)
+        whenever it has a match.
 
         The latest message is normalised through ``EzvizCamera`` with
         an empty ``device_obj`` so we reuse upstream's parsing without
@@ -725,7 +743,13 @@ class Hp7Api:
         # ``device_obj={}`` keeps the camera helper offline — it only
         # needs the alarm payload to populate the four fields below.
         camera = Hp7EzvizCamera(self._client, serial, device_obj={"SWITCH": []})
-        cam_status = camera.status_alarm_dict(latest)
+        # ``unifiedmsg/list`` items carry raw cloud keys (``title``,
+        # ``timeStr``, ``pic``, ``subType``) — convert to the
+        # legacy-shaped dict that ``status_alarm_dict`` expects,
+        # otherwise every field falls back to its "no alarm" default
+        # and the binary sensors stay permanently off.
+        normalised = camera._normalize_unified_message(latest) if latest else None
+        cam_status = camera.status_alarm_dict(normalised)
         _LOGGER.debug("Alarm poll for %s returned message=%s", serial, bool(latest))
 
         return {
@@ -733,4 +757,6 @@ class Hp7Api:
             "last_alarm_time": cam_status.get("last_alarm_time"),
             "last_alarm_pic": cam_status.get("last_alarm_pic"),
             "alarm_name": cam_status.get("last_alarm_type_name"),
+            "alarm_type_code": cam_status.get("last_alarm_type_code"),
+            "motion_trigger": cam_status.get("Motion_Trigger"),
         }

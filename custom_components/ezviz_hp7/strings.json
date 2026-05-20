@@ -87,11 +87,32 @@
           "yes": "yes",
           "no": "no"
         }
+      },
+      "alarm_type_code": {
+        "name": "Alarm type code"
       }
     },
     "binary_sensor": {
       "image_encryption": {
         "name": "Video encryption enabled"
+      },
+      "motion_trigger": {
+        "name": "Motion"
+      },
+      "smart_detection_alarm": {
+        "name": "Smart detection alarm"
+      },
+      "intelligent_detection_alarm": {
+        "name": "Intelligent detection"
+      },
+      "doorbell_ringing": {
+        "name": "Doorbell ringing"
+      },
+      "gate_open": {
+        "name": "Gate opened"
+      },
+      "unlock_lock": {
+        "name": "Lock unlocked"
       }
     },
     "select": {
