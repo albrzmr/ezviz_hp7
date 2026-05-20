@@ -75,6 +75,9 @@
           "yes": "sì",
           "no": "no"
         }
+      },
+      "alarm_type_code": {
+        "name": "Codice tipo allarme"
       }
     },
     "binary_sensor": {
@@ -95,6 +98,9 @@
       },
       "image_encryption": {
         "name": "Crittografia video attivata"
+      },
+      "motion_trigger": {
+        "name": "Movimento"
       }
     },
     "button": {

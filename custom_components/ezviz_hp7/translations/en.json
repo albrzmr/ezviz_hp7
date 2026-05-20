@@ -86,6 +86,9 @@
           "yes": "yes",
           "no": "no"
         }
+      },
+      "alarm_type_code": {
+        "name": "Alarm Type Code"
       }
     },
     "binary_sensor": {
@@ -106,6 +109,9 @@
       },
       "image_encryption": {
         "name": "Video Encryption Enabled"
+      },
+      "motion_trigger": {
+        "name": "Motion"
       }
     },
     "select": {

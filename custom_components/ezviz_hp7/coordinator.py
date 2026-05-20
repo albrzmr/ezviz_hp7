@@ -75,6 +75,13 @@ class Hp7Coordinator(DataUpdateCoordinator):
         # boxes whose monotonic clock is still in the seconds range.
         self._cached_static: dict[str, Any] = {}
         self._last_static_fetch: float | None = None
+        # Tracks the most recent ``last_alarm_time`` we emitted a
+        # diagnostic INFO log for.  Used to surface the raw cloud
+        # alarm code / name exactly once per new event so users can
+        # report them — the ``alarmType`` numeric code is language-
+        # stable and is what binary sensors should match on long-term
+        # (issue #8).
+        self._last_logged_alarm_time: str | None = None
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch fresh alarms + (occasionally) refresh static device info.
@@ -128,4 +135,15 @@ class Hp7Coordinator(DataUpdateCoordinator):
                     "Static poll failed (%s) — reusing cached static data", exc
                 )
 
-        return {**self._cached_static, **alarms}
+        merged = {**self._cached_static, **alarms}
+        new_alarm_time = merged.get("last_alarm_time")
+        if new_alarm_time and new_alarm_time != self._last_logged_alarm_time:
+            self._last_logged_alarm_time = new_alarm_time
+            _LOGGER.info(
+                "EZVIZ alarm received (serial=%s): code=%s name=%r time=%s",
+                self.serial,
+                merged.get("alarm_type_code"),
+                merged.get("alarm_name"),
+                new_alarm_time,
+            )
+        return merged

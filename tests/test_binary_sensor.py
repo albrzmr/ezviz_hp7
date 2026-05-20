@@ -14,13 +14,14 @@ from __future__ import annotations
 
 from datetime import timedelta
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 from homeassistant.util import dt as dt_util
 
 from custom_components.ezviz_hp7.binary_sensor import (
+    ALARM_CODE_FIELD,
     ALARM_FIELD,
     ALARM_MAP,
     ALARM_TIME_FIELD,
@@ -31,7 +32,7 @@ from custom_components.ezviz_hp7.binary_sensor import (
     _to_bool,
     async_setup_entry,
 )
-from custom_components.ezviz_hp7.const import DOMAIN
+from custom_components.ezviz_hp7.const import DOMAIN, SIGNAL_LOCAL_UNLOCK
 
 # ── _to_bool ────────────────────────────────────────────────────────
 
@@ -67,26 +68,42 @@ def test_to_bool(raw: Any, expected: bool) -> None:
 # ── ALARM_MAP / SIMPLE_MAP shape ───────────────────────────────────
 
 
-def test_simple_map_contains_image_encryption() -> None:
-    """``image_encryption`` is the one simple-bool field the HP7 firmware
-    populates via ``STATUS.isEncrypt`` — surfaced so users see it on the
-    device card when Video Encryption is toggled on."""
-    assert len(SIMPLE_MAP) == 1
-    data_key, translation_key, device_class, icon = SIMPLE_MAP[0]
-    assert data_key == "image_encryption"
-    assert translation_key == "image_encryption"
-    assert device_class is None
-    assert icon.startswith("mdi:")
+def test_simple_map_contains_image_encryption_and_motion_trigger() -> None:
+    """Both simple bools we surface today must remain in the map —
+    ``image_encryption`` flags Video Encryption (an integration-blocker)
+    and ``motion_trigger`` mirrors the official integration's motion
+    window so dashboards work consistently between forks."""
+    keys = {cfg[0] for cfg in SIMPLE_MAP}
+    assert "image_encryption" in keys
+    assert "motion_trigger" in keys
+    for cfg in SIMPLE_MAP:
+        data_key, translation_key, _device_class, icon = cfg
+        assert data_key
+        assert translation_key
+        assert icon.startswith("mdi:")
 
 
 @pytest.mark.parametrize("cfg", ALARM_MAP, ids=lambda c: c[1])
 def test_alarm_map_shape(cfg: tuple) -> None:
-    match_values, translation_key, device_class, icon = cfg
+    match_values, translation_key, device_class, icon, local_actions, match_codes = cfg
     assert isinstance(match_values, list) and match_values
     assert all(isinstance(v, str) and v for v in match_values)
     assert isinstance(translation_key, str) and translation_key
     assert device_class is None or isinstance(device_class, BinarySensorDeviceClass)
     assert icon.startswith("mdi:")
+    assert isinstance(local_actions, list)
+    assert all(isinstance(v, str) and v for v in local_actions)
+    assert isinstance(match_codes, list)
+    assert all(isinstance(v, str) and v for v in match_codes)
+
+
+def test_unlock_sensors_have_local_actions() -> None:
+    """gate_open / unlock_lock must have a local-dispatcher fallback —
+    that's the whole point of issue #8.  If the next refactor strips
+    the field by accident, this test catches it loudly."""
+    by_key = {cfg[1]: cfg for cfg in ALARM_MAP}
+    assert "unlock_gate" in by_key["gate_open"][4]
+    assert "unlock_door" in by_key["unlock_lock"][4]
 
 
 # ── Hp7BinarySimple ────────────────────────────────────────────────
@@ -129,11 +146,28 @@ def test_hp7_binary_simple_device_info_uses_api_model() -> None:
 
 
 def _alarm(
-    match_values: list[str], data: dict[str, Any] | None = None
+    match_values: list[str],
+    data: dict[str, Any] | None = None,
+    local_actions: list[str] | None = None,
+    match_codes: list[str] | None = None,
+    seen_first_update: bool = True,
 ) -> Hp7BinaryAlarm:
     coord = MagicMock()
     coord.data = data if data is not None else {}
-    entity = Hp7BinaryAlarm(coord, "S-1", match_values, "smart", None, "mdi:run")
+    entity = Hp7BinaryAlarm(
+        coord,
+        "S-1",
+        match_values,
+        "smart",
+        None,
+        "mdi:run",
+        local_actions=local_actions,
+        match_codes=match_codes,
+    )
+    # Skip the cold-start seeding hop by default — most tests exercise
+    # the steady-state path; ones that care about first-update behaviour
+    # opt out by passing ``seen_first_update=False``.
+    entity._seen_first_update = seen_first_update
     # The entity is never added to HA — short-circuit anything that
     # would touch the (missing) entity platform.
     entity.async_write_ha_state = MagicMock()
@@ -165,6 +199,67 @@ def test_hp7_binary_alarm_is_off_after_pulse_window(freezer) -> None:
     assert a.is_on is False
 
 
+def test_first_coordinator_update_does_not_pulse_stale_alarm() -> None:
+    """The very first update after a HA restart seeds ``_prev_alarm_time``
+    silently — a cold-start snapshot of a 2h-old doorbell ring is NOT a
+    fresh event and must not flip the binary sensor ON for 3 seconds."""
+    a = _alarm(["Your doorbell is ringing"], seen_first_update=False)
+    a.coordinator.data = {
+        ALARM_FIELD: "Your doorbell is ringing",
+        ALARM_TIME_FIELD: "2026-05-20 12:00:00",  # stale
+    }
+    with patch(
+        "custom_components.ezviz_hp7.binary_sensor.async_call_later"
+    ) as call_later:
+        a._handle_coordinator_update()
+
+    assert a._seen_first_update is True
+    assert a._prev_alarm_time == "2026-05-20 12:00:00"
+    assert a._last_trigger is None
+    call_later.assert_not_called()
+    a.async_write_ha_state.assert_called_once()
+
+
+def test_second_update_with_same_alarm_time_after_seed_does_not_pulse() -> None:
+    """If the second update still shows the same (stale) alarm_time we
+    saw on the cold-start snapshot, still no pulse — only a *new*
+    alarm_time counts as a fresh event."""
+    a = _alarm(["Ring"], seen_first_update=False)
+    a.coordinator.data = {
+        ALARM_FIELD: "Ring",
+        ALARM_TIME_FIELD: "2026-05-20 12:00:00",
+    }
+    with patch(
+        "custom_components.ezviz_hp7.binary_sensor.async_call_later"
+    ) as call_later:
+        a._handle_coordinator_update()  # seed
+        a._handle_coordinator_update()  # same time → no pulse
+    assert a._last_trigger is None
+    call_later.assert_not_called()
+
+
+def test_second_update_with_new_alarm_time_after_seed_pulses() -> None:
+    """After the cold-start seed, a genuinely newer ``last_alarm_time``
+    must fire the pulse normally."""
+    a = _alarm(["Ring"], seen_first_update=False)
+    a.coordinator.data = {
+        ALARM_FIELD: "Ring",
+        ALARM_TIME_FIELD: "2026-05-20 12:00:00",
+    }
+    with patch(
+        "custom_components.ezviz_hp7.binary_sensor.async_call_later"
+    ) as call_later:
+        a._handle_coordinator_update()  # seed
+        a.coordinator.data = {
+            ALARM_FIELD: "Ring",
+            ALARM_TIME_FIELD: "2026-05-20 12:00:15",  # newer
+        }
+        a._handle_coordinator_update()
+    assert a._last_trigger is not None
+    assert a._prev_alarm_time == "2026-05-20 12:00:15"
+    call_later.assert_called_once()
+
+
 def test_handle_coordinator_update_triggers_on_match() -> None:
     a = _alarm(["Smart Detection Alarm"])
     a.coordinator.data = {
@@ -182,6 +277,44 @@ def test_handle_coordinator_update_triggers_on_match() -> None:
     args, _ = call_later.call_args
     assert args[0] is a.hass and args[1] == PULSE_SECONDS and callable(args[2])
     a.async_write_ha_state.assert_called_once()
+
+
+def test_handle_coordinator_update_triggers_on_code_match() -> None:
+    """``alarmType`` code match takes precedence over the localised name.
+
+    This is the path that lets non-English EZVIZ accounts trigger the
+    sensors at all — the cloud translates ``sampleName`` but not the
+    numeric code.  See issue #8.
+    """
+    a = _alarm(["English Name We Don't Speak"], match_codes=["3001"])
+    a.coordinator.data = {
+        ALARM_FIELD: "L'app EZVIZ apre il cancello",  # localised, doesn't match name list
+        ALARM_CODE_FIELD: "3001",
+        ALARM_TIME_FIELD: "2026-05-10T18:47:22+00:00",
+    }
+    with patch(
+        "custom_components.ezviz_hp7.binary_sensor.async_call_later"
+    ) as call_later:
+        a._handle_coordinator_update()
+
+    assert a._last_trigger is not None
+    assert a._prev_alarm_time == "2026-05-10T18:47:22+00:00"
+    call_later.assert_called_once()
+
+
+def test_handle_coordinator_update_ignores_non_matching_code() -> None:
+    a = _alarm(["Name"], match_codes=["3001"])
+    a.coordinator.data = {
+        ALARM_FIELD: "Other",
+        ALARM_CODE_FIELD: "9999",
+        ALARM_TIME_FIELD: "2026-05-10T18:47:22+00:00",
+    }
+    with patch(
+        "custom_components.ezviz_hp7.binary_sensor.async_call_later"
+    ) as call_later:
+        a._handle_coordinator_update()
+    assert a._last_trigger is None
+    call_later.assert_not_called()
 
 
 def test_handle_coordinator_update_ignores_non_matching_alarm() -> None:
@@ -259,6 +392,97 @@ def test_hp7_binary_alarm_device_info_falls_back_to_hp7() -> None:
     coord.data = {}
     a = Hp7BinaryAlarm(coord, "S-7", ["X"], "smart", None, "mdi:run")
     assert a.device_info["model"] == "HP7"
+
+
+# ── Local-dispatch fallback (issue #8) ──────────────────────────────
+
+
+def test_handle_local_unlock_pulses_for_matching_serial_and_action() -> None:
+    """The dispatcher signal fires when a HA-originated unlock succeeds —
+    that's how non-English accounts get a working ``gate_open`` / ``unlock_lock``
+    sensor even though the cloud's ``sampleName`` never matches the English
+    strings in ``ALARM_MAP``."""
+    a = _alarm(["irrelevant"], local_actions=["unlock_gate"])
+    with patch(
+        "custom_components.ezviz_hp7.binary_sensor.async_call_later"
+    ) as call_later:
+        a._handle_local_unlock("S-1", "unlock_gate")
+
+    assert a._last_trigger is not None
+    call_later.assert_called_once()
+    a.async_write_ha_state.assert_called_once()
+
+
+def test_handle_local_unlock_ignores_other_serial() -> None:
+    a = _alarm(["x"], local_actions=["unlock_gate"])
+    with patch(
+        "custom_components.ezviz_hp7.binary_sensor.async_call_later"
+    ) as call_later:
+        a._handle_local_unlock("OTHER-SERIAL", "unlock_gate")
+    assert a._last_trigger is None
+    call_later.assert_not_called()
+
+
+def test_handle_local_unlock_ignores_other_action() -> None:
+    a = _alarm(["x"], local_actions=["unlock_gate"])
+    with patch(
+        "custom_components.ezviz_hp7.binary_sensor.async_call_later"
+    ) as call_later:
+        a._handle_local_unlock("S-1", "unlock_door")
+    assert a._last_trigger is None
+    call_later.assert_not_called()
+
+
+def test_handle_local_unlock_no_op_when_no_local_actions() -> None:
+    """Sensors with empty ``local_actions`` (the cloud-only ones —
+    doorbell_ringing, smart/intelligent detection) must never react to
+    dispatcher signals."""
+    a = _alarm(["x"])  # local_actions defaults to None → []
+    with patch(
+        "custom_components.ezviz_hp7.binary_sensor.async_call_later"
+    ) as call_later:
+        a._handle_local_unlock("S-1", "unlock_gate")
+    assert a._last_trigger is None
+    call_later.assert_not_called()
+
+
+async def test_async_added_to_hass_subscribes_when_local_actions_present() -> None:
+    a = _alarm(["x"], local_actions=["unlock_gate"])
+    a.async_on_remove = MagicMock()
+    with (
+        patch(
+            "custom_components.ezviz_hp7.binary_sensor.async_dispatcher_connect",
+            return_value=MagicMock(),
+        ) as connect,
+        patch.object(
+            Hp7BinaryAlarm.__bases__[0], "async_added_to_hass", new_callable=AsyncMock
+        ),
+    ):
+        await a.async_added_to_hass()
+    connect.assert_called_once()
+    args, _ = connect.call_args
+    assert args[0] is a.hass
+    assert args[1] == SIGNAL_LOCAL_UNLOCK
+    # Bound-method identity check: same function + same instance.
+    assert args[2].__func__ is Hp7BinaryAlarm._handle_local_unlock
+    assert args[2].__self__ is a
+    a.async_on_remove.assert_called_once()
+
+
+async def test_async_added_to_hass_skips_subscribe_without_local_actions() -> None:
+    a = _alarm(["x"])
+    a.async_on_remove = MagicMock()
+    with (
+        patch(
+            "custom_components.ezviz_hp7.binary_sensor.async_dispatcher_connect",
+        ) as connect,
+        patch.object(
+            Hp7BinaryAlarm.__bases__[0], "async_added_to_hass", new_callable=AsyncMock
+        ),
+    ):
+        await a.async_added_to_hass()
+    connect.assert_not_called()
+    a.async_on_remove.assert_not_called()
 
 
 # ── async_setup_entry ──────────────────────────────────────────────

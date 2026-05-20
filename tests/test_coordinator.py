@@ -262,6 +262,48 @@ async def test_stats_skipped_when_no_stats_object(coord) -> None:
     await c._async_update_data()  # no raise
 
 
+# ── Diagnostic INFO log on new alarms (issue #8) ───────────────────
+
+
+async def test_logs_info_once_per_new_alarm_time(coord, caplog) -> None:
+    """The coordinator must emit a single INFO log per new
+    ``last_alarm_time`` so the user can read the raw ``alarmType`` code
+    and report it back — that's how non-English EZVIZ accounts unblock
+    the cloud-only sensors (smart / intelligent / doorbell ringing)."""
+    api = _api(
+        alarms={
+            "last_alarm_time": "2026-05-20 12:00:00",
+            "alarm_name": "L'app EZVIZ apre il cancello",
+            "alarm_type_code": "3001",
+        }
+    )
+    c = coord(api=api)
+
+    caplog.set_level("INFO")
+    await c._async_update_data()
+    info_lines = [r for r in caplog.records if "EZVIZ alarm received" in r.message]
+    assert len(info_lines) == 1
+    msg = info_lines[0].getMessage()
+    assert "code=3001" in msg
+    assert "3001" in msg and "cancello" in msg
+
+
+async def test_logs_info_skipped_on_repeat_alarm_time(coord, caplog) -> None:
+    api = _api(
+        alarms={
+            "last_alarm_time": "2026-05-20 12:00:00",
+            "alarm_name": "Ring",
+            "alarm_type_code": "3001",
+        }
+    )
+    c = coord(api=api)
+    caplog.set_level("INFO")
+    await c._async_update_data()
+    await c._async_update_data()
+    info_lines = [r for r in caplog.records if "EZVIZ alarm received" in r.message]
+    assert len(info_lines) == 1
+
+
 # ── Configuration ──────────────────────────────────────────────────
 
 

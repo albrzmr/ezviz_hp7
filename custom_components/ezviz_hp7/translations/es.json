@@ -86,26 +86,32 @@
           "yes": "sí",
           "no": "no"
         }
+      },
+      "alarm_type_code": {
+        "name": "Código de tipo de alarma"
       }
     },
     "binary_sensor": {
       "smart_detection_alarm": {
-        "name": "Alarma de Detección Inteligente"
+        "name": "Detección de movimiento"
       },
       "intelligent_detection_alarm": {
-        "name": "Detección Inteligente"
+        "name": "Detección inteligente (persona / vehículo)"
       },
       "doorbell_ringing": {
-        "name": "Timbre Sonando"
+        "name": "Timbre"
       },
       "gate_open": {
-        "name": "Portón Abierto"
+        "name": "Portón abierto"
       },
       "unlock_lock": {
-        "name": "Cerradura Desbloqueada"
+        "name": "Cerradura abierta"
       },
       "image_encryption": {
-        "name": "Cifrado de Vídeo Activado"
+        "name": "Cifrado de vídeo"
+      },
+      "motion_trigger": {
+        "name": "Movimiento"
       }
     },
     "select": {
