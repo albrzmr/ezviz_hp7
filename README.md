@@ -1,5 +1,21 @@
 # Home Assistant Integration for EZVIZ HP7 / CP7 Intercom
 
+> [!WARNING]
+> ## ⚠️ This fork is deprecated — please use the upstream integration
+>
+> The pure-Python **LAN live-stream** work that lived in this fork has been
+> folded into the **original integration**, which is actively maintained and
+> now goes further than this fork ever did: LAN audio, the p2p-register + CAS
+> key handshake, HEVC→H.264 transcoding, an MJPEG live-view mode, and all the
+> device entities — in one place.
+>
+> 👉 **Use [Bobsilvio/ezviz_hp7](https://github.com/Bobsilvio/ezviz_hp7) instead**,
+> and set **Stream source = `local`** in the integration options for the LAN stream.
+>
+> Big thanks to **[@Bobsilvio](https://github.com/Bobsilvio)** for integrating the
+> LAN protocol into the main project and for the fast follow-up work. This
+> repository is no longer maintained and won't receive further updates.
+
 [![CI](https://github.com/albrzmr/ezviz_hp7/actions/workflows/ci.yml/badge.svg)](https://github.com/albrzmr/ezviz_hp7/actions/workflows/ci.yml)
 [![HACS Validation](https://github.com/albrzmr/ezviz_hp7/actions/workflows/ci.yml/badge.svg?event=schedule)](https://github.com/albrzmr/ezviz_hp7/actions)
 [![codecov](https://codecov.io/gh/albrzmr/ezviz_hp7/branch/main/graph/badge.svg)](https://codecov.io/gh/albrzmr/ezviz_hp7)
